@@ -2,6 +2,16 @@
 
 A command-line utility for interacting with Vena's ETL API. This tool allows you to upload CSV files, manage ETL jobs, and work with templates.
 
+## Features
+
+- **Single File Upload**: Upload individual CSV files to Vena
+- **Template Management**: List and view details of ETL templates
+- **Job Management**: Check status and cancel ETL jobs
+- **Multi-File Upload**: Upload multiple files in a single run using pattern matching
+- **Multi-Step ETL Process Support**: Handle complex ETL processes
+- **Environment-Based Configuration**: Configure file mappings in your `.env` file
+- **Windows Task Scheduler Integration**: Automate imports on a schedule
+
 ## Installation
 
 1. Clone this repository:
@@ -20,15 +30,21 @@ A command-line utility for interacting with Vena's ETL API. This tool allows you
    cp .env.example .env
    ```
    
-4. Edit the `.env` file with your Vena credentials:
+4. Edit the `.env` file with your Vena credentials and configuration:
    ```
+   # Basic Authentication
    VENA_USERNAME=your_username
    VENA_PASSWORD=your_password
-   VENA_TEMPLATE_ID=your_default_template_id
    VENA_API_URL=https://us2.vena.io
+   
+   # Default template (used by the original import.js)
+   VENA_TEMPLATE_ID=your_default_template_id
+   
+   # Multi-import configuration (optional)
+   # See "Multi-Import Configuration" section below
    ```
 
-## Usage
+## Basic Usage (Single File Import)
 
 ### List Available Templates
 
@@ -84,6 +100,148 @@ For detailed usage instructions:
 node import.js help
 ```
 
+## Multi-Import Usage
+
+The multi-import functionality allows you to upload multiple files in a single run based on pattern matching and configuration defined in your `.env` file.
+
+### Multi-Import Configuration
+
+Update your `.env` file to include the following variables:
+
+```
+# Source directory for CSV files
+VENA_SOURCE_DIRECTORY=C:/path/to/csv/files
+
+# File Mapping 1
+VENA_FILE_PATTERN_1=revenue_*.csv
+VENA_TEMPLATE_ID_1=template_id_for_revenue
+VENA_PROCESS_TYPE_1=single
+
+# File Mapping 2
+VENA_FILE_PATTERN_2=FY*_UTILIZATION.csv
+VENA_TEMPLATE_ID_2=template_id_for_utilization
+VENA_PROCESS_TYPE_2=single
+
+# File Mapping 3 (multi-step process)
+VENA_FILE_PATTERN_3=expenses_*.csv
+VENA_TEMPLATE_ID_3=template_id_for_expenses
+VENA_PROCESS_TYPE_3=multi
+
+# Steps for mapping 3
+VENA_STEP_INPUT_ID_3_1=step1_input_id
+VENA_STEP_FILE_PATTERN_3_1=expenses_step1_*.csv
+VENA_STEP_INPUT_ID_3_2=step2_input_id
+VENA_STEP_FILE_PATTERN_3_2=expenses_step2_*.csv
+
+# Scheduling Configuration
+VENA_SCHEDULE_MINUTE=0
+VENA_SCHEDULE_HOUR=5
+VENA_SCHEDULE_DAY=1
+VENA_SCHEDULE_MONTH=*
+VENA_SCHEDULE_DAYOFWEEK=*
+```
+
+### Running Multi-Import
+
+To run the import process using your .env configuration:
+
+```bash
+node multi_import.js run
+```
+
+This will:
+1. Read the configuration from your .env file
+2. Look for files matching your patterns in the source directory
+3. Upload each file to its corresponding template
+4. For multi-step processes, create ETL jobs and upload files to each step
+5. Submit all jobs for processing
+
+### Setting Up Scheduled Tasks
+
+To create a Windows scheduled task:
+
+```bash
+node multi_import.js schedule
+```
+
+This will create the necessary batch file and task definition to run the import automatically according to the schedule defined in your .env file.
+
+### Get Multi-Import Help
+
+For detailed multi-import usage instructions:
+
+```bash
+node multi_import.js help
+```
+
+## Finding Template IDs and Input IDs
+
+For each mapping in multi-import, you need to specify the correct Vena template ID:
+
+1. To find your template IDs, run:
+   ```bash
+   node import.js templates
+   ```
+
+2. For multi-step processes, you also need the Step Input IDs:
+   ```bash
+   node import.js template <template-id>
+   ```
+   Look for the `inputId` fields in the response.
+
+## Scheduling Configuration
+
+The schedule is configured in your .env file using these variables:
+
+```
+VENA_SCHEDULE_MINUTE=0      # Minute (0-59)
+VENA_SCHEDULE_HOUR=5        # Hour (0-23)
+VENA_SCHEDULE_DAY=1         # Day of month (1-31)
+VENA_SCHEDULE_MONTH=*       # Month (1-12 or *)
+VENA_SCHEDULE_DAYOFWEEK=*   # Day of week (0-6, 0=Sunday or *)
+```
+
+Examples:
+- Monthly (1st day at 5:00 AM): MINUTE=0, HOUR=5, DAY=1, MONTH=*, DAYOFWEEK=*
+- Weekly (Every Monday at noon): MINUTE=0, HOUR=12, DAY=*, MONTH=*, DAYOFWEEK=1
+- Daily (8:30 AM every day): MINUTE=30, HOUR=8, DAY=*, MONTH=*, DAYOFWEEK=*
+
+## File Pattern Matching
+
+File patterns in multi-import use a simple wildcard syntax:
+
+- `*` matches any sequence of characters
+- Examples:
+  - `revenue_*.csv` matches files like `revenue_q1.csv`, `revenue_q2.csv`, etc.
+  - `FY24_*.csv` matches files like `FY24_UTILIZATION.csv`, `FY24_REVENUE.csv`, etc.
+
+## Environment Variable Reference
+
+Here's a comprehensive list of all environment variables used by the tool:
+
+1. **Basic Configuration**:
+   - `VENA_USERNAME`: Your Vena username
+   - `VENA_PASSWORD`: Your Vena password
+   - `VENA_API_URL`: Vena API URL (default: https://us2.vena.io)
+   - `VENA_TEMPLATE_ID`: Default template ID for single file uploads
+
+2. **Multi-Import Configuration**:
+   - `VENA_SOURCE_DIRECTORY`: Path to the CSV files
+   - `VENA_FILE_PATTERN_N`: File pattern for mapping N
+   - `VENA_TEMPLATE_ID_N`: Template ID for mapping N
+   - `VENA_PROCESS_TYPE_N`: "single" or "multi" for mapping N
+
+3. **Multi-Step Process**:
+   - `VENA_STEP_INPUT_ID_N_M`: Input ID for step M of mapping N
+   - `VENA_STEP_FILE_PATTERN_N_M`: File pattern for step M of mapping N
+
+4. **Scheduling**:
+   - `VENA_SCHEDULE_MINUTE`: Minute (0-59)
+   - `VENA_SCHEDULE_HOUR`: Hour (0-23)
+   - `VENA_SCHEDULE_DAY`: Day of month (1-31)
+   - `VENA_SCHEDULE_MONTH`: Month (1-12 or *)
+   - `VENA_SCHEDULE_DAYOFWEEK`: Day of week (0-6, 0=Sunday or *)
+
 ## Logs
 
 All activities are logged in the `logs` directory:
@@ -93,6 +251,8 @@ All activities are logged in the `logs` directory:
 - `api-history.jsonl`: Template listing and viewing operations
 - `error.jsonl`: Error logs for all operations
 
+When using the scheduler, a separate `import_log.txt` file is created in the root directory.
+
 ## Project Structure
 
 The tool is organized into the following modules:
@@ -100,18 +260,24 @@ The tool is organized into the following modules:
 ```
 vena-etl-tool/
 ├── src/
-│   ├── auth/            # Authentication utilities
-│   ├── api/             # API interaction modules
-│   │   ├── templates.js # Template and upload operations
-│   │   └── jobs.js      # Job status and management
-│   ├── utils/           # Utility functions
-│   │   ├── fileHandling.js # File operations
-│   │   └── logging.js   # Logging functions
-│   └── config.js        # Centralized configuration
-├── import.js            # Main entry point
+│   ├── auth/                  # Authentication utilities
+│   │   └── index.js           # Handles credential management and authentication
+│   ├── api/                   # API interaction modules
+│   │   ├── templates.js       # Template and upload operations
+│   │   ├── jobs.js            # Job status and management
+│   │   └── multiImport.js     # Multi-step ETL operations
+│   ├── scheduler/             # Scheduling utilities
+│   │   └── windowsTaskScheduler.js  # Windows task scheduling
+│   ├── utils/                 # Utility functions
+│   │   ├── fileHandling.js    # File operations
+│   │   └── logging.js         # Logging functions
+│   └── config.js              # Centralized configuration
+├── import.js                  # Single file import entry point
+├── multi_import.js            # Multi-file import entry point
+├── run_vena_import.bat        # Batch file for scheduled runs
 ├── package.json
 ├── README.md
-└── .env                 # Environment variables (not in repo)
+└── .env                       # Environment variables (not in repo)
 ```
 
 ## Security Notes
@@ -132,7 +298,8 @@ If you encounter issues:
 1. Check that your credentials in `.env` are correct
 2. Verify that your CSV file is properly formatted
 3. Ensure you have the correct template ID
-4. Review the error logs in `logs/error.jsonl`
+4. For multi-import, make sure your file patterns match the actual files
+5. Review the logs for detailed error messages
 
 ## Making the Script Executable (Unix/Linux/Mac)
 
@@ -140,24 +307,8 @@ To run the script directly without typing `node`:
 
 ```bash
 chmod +x import.js
+chmod +x multi_import.js
 ./import.js templates
-```
-
-## Development
-
-### Adding New Features
-
-To add new functionality:
-
-1. Determine which module should contain the new feature
-2. Add the necessary functions to the appropriate module
-3. Update the main entry point (`import.js`) to expose the new command
-4. Update the help text to document the new command
-
-### Running Tests
-
-```bash
-npm test
 ```
 
 ## License
