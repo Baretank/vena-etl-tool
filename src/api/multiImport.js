@@ -5,10 +5,13 @@
 const fs = require('fs');
 const path = require('path');
 const FormData = require('form-data');
+const fetch = require('node-fetch'); // Added missing import
 const { config } = require('../config');
 const { getRequestHeaders } = require('../auth');
 const { fetchWithRetry } = require('./templates');
-const { logApiOperation, logError, logUpload } = require('../utils/logging');
+const { logUpload } = require('../utils/logging');
+const { sanitizeFilePath, sanitizeId } = require('../utils/fileHandling');
+const { handleApiResponse, retryOperation } = require('../utils/apiResponse');
 
 /**
  * Create a new ETL job from a template without starting it
@@ -16,42 +19,36 @@ const { logApiOperation, logError, logUpload } = require('../utils/logging');
  * @returns {Promise<Object>} Created job
  */
 async function createEtlJob(templateId) {
-  try {
-    console.log(`Creating ETL job from template ID: ${templateId}`);
-    
-    const options = {
-      method: 'POST',
-      headers: getRequestHeaders()
-    };
-    
-    const job = await fetchWithRetry(
-      `${config.api.baseUrl}/api/public/v1/etl/templates/${templateId}/jobs`, 
-      options
-    );
-    
-    console.log('✅ ETL job created successfully');
-    
-    // Log the operation
-    logApiOperation({
-      action: 'create-etl-job',
-      templateId,
-      jobId: job.id
-    });
-    
-    return job;
-  } catch (err) {
-    console.error('❌ Error:', err.message);
-    
-    // Log error
-    logError({
-      action: 'create-etl-job',
-      templateId,
-      status: 'error',
-      error: err.message
-    });
-    
-    throw err;
+  // Sanitize the template ID to prevent injection attacks
+  const sanitizedTemplateId = sanitizeId(templateId);
+  
+  if (sanitizedTemplateId !== templateId) {
+    console.warn('Warning: Template ID contained potentially unsafe characters and was sanitized.');
   }
+  
+  console.log(`Creating ETL job from template ID: ${sanitizedTemplateId}`);
+  
+  const options = {
+    method: 'POST',
+    headers: getRequestHeaders()
+  };
+  
+  // Use centralized response handler
+  const job = await handleApiResponse(
+    'create-etl-job',
+    async () => {
+      return await fetchWithRetry(
+        `${config.api.baseUrl}/api/public/v1/etl/templates/${sanitizedTemplateId}/jobs`, 
+        options
+      );
+    },
+    { templateId: sanitizedTemplateId }
+  );
+  
+  console.log('✅ ETL job created successfully');
+  console.log(`Job ID: ${job.id}`);
+  
+  return job;
 }
 
 /**
@@ -62,83 +59,109 @@ async function createEtlJob(templateId) {
  * @returns {Promise<void>} 
  */
 async function loadFileToStep(jobId, inputId, filePath) {
-  try {
-    console.log(`Loading file to ETL step: Job ID ${jobId}, Input ID ${inputId}`);
-    
-    const fileName = path.basename(filePath);
-    const fileSize = (fs.statSync(filePath).size / 1024).toFixed(2) + ' KB';
-    const fileContent = fs.readFileSync(filePath);
-    
-    console.log(`File: ${fileName} (${fileSize})`);
-    
-    // Create form data
-    const form = new FormData();
-    
-    // Add metadata
-    const metadata = {
-      input: {
-        partName: 'file',
-        fileFormat: 'CSV',
-        fileEncoding: 'UTF-8',
-        fileName: fileName
-      }
-    };
-    
-    form.append('metadata', JSON.stringify(metadata));
-    form.append('file', fileContent, {
-      filename: fileName,
-      contentType: 'text/csv'
-    });
-    
-    // Create headers object
-    let headers = getRequestHeaders();
-    
-    // Build options for request
-    const options = {
-      method: 'PUT',
-      headers: {
-        ...headers,
-        ...form.getHeaders() // Add form-specific headers
-      },
-      body: form
-    };
-    
-    // Submit the request (this endpoint returns 204 No Content)
-    await fetch(
-      `${config.api.baseUrl}/api/public/v1/etl/jobs/${jobId}/inputs/${inputId}/file`, 
-      options
-    ).then(response => {
+  // Sanitize inputs to prevent injection and path traversal attacks
+  const sanitizedJobId = sanitizeId(jobId);
+  const sanitizedInputId = sanitizeId(inputId);
+  const sanitizedFilePath = sanitizeFilePath(filePath);
+  
+  // Log warnings if sanitization changed any values
+  if (sanitizedJobId !== jobId) {
+    console.warn('Warning: Job ID contained potentially unsafe characters and was sanitized.');
+  }
+  
+  if (sanitizedInputId !== inputId) {
+    console.warn('Warning: Input ID contained potentially unsafe characters and was sanitized.');
+  }
+  
+  if (sanitizedFilePath !== filePath) {
+    console.warn('Warning: File path contained potentially unsafe characters and was sanitized.');
+  }
+  
+  console.log(`Loading file to ETL step: Job ID ${sanitizedJobId}, Input ID ${sanitizedInputId}`);
+  
+  const fileName = path.basename(sanitizedFilePath);
+  
+  // Security note: These operations use non-literal file paths as that's the core functionality
+  // of this ETL tool. The filePath is validated and sanitized before reaching this point.
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  const fileSize = (fs.statSync(sanitizedFilePath).size / 1024).toFixed(2) + ' KB';
+  
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  const fileContent = fs.readFileSync(sanitizedFilePath);
+  
+  console.log(`File: ${fileName} (${fileSize})`);
+  
+  // Create form data
+  const form = new FormData();
+  
+  // Add metadata
+  const metadata = {
+    input: {
+      partName: 'file',
+      fileFormat: 'CSV',
+      fileEncoding: 'UTF-8',
+      fileName: fileName
+    }
+  };
+  
+  form.append('metadata', JSON.stringify(metadata));
+  form.append('file', fileContent, {
+    filename: fileName,
+    contentType: 'text/csv'
+  });
+  
+  // Create headers object
+  let headers = getRequestHeaders();
+  
+  // Build options for request
+  const options = {
+    method: 'PUT',
+    headers: {
+      ...headers,
+      ...form.getHeaders() // Add form-specific headers
+    },
+    body: form
+  };
+  
+  // Use centralized retry operation for file upload
+  // This endpoint returns 204 No Content, so we need special handling
+  await retryOperation(
+    async () => {
+      const response = await fetch(
+        `${config.api.baseUrl}/api/public/v1/etl/jobs/${sanitizedJobId}/inputs/${sanitizedInputId}/file`, 
+        options
+      );
+      
       if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`);
       }
+      
       return response;
-    });
-    
-    console.log('✅ File loaded to ETL step successfully');
-    
-    // Log the operation
-    logUpload({
-      jobId,
-      inputId,
-      fileName,
-      fileSize,
-      status: 'success'
-    });
-    
-    return;
-  } catch (err) {
-    console.error('❌ Error:', err.message);
-    
-    // Log error
-    logError({
-      jobId,
-      inputId,
-      status: 'error',
-      error: err.message
-    });
-    
-    throw err;
-  }
+    },
+    3, // Number of retries
+    1000, // Initial backoff time
+    (error) => {
+      // Retry on network errors or server errors (5xx)
+      const isNetworkError = error.message.includes('ECONNRESET') || 
+                            error.message.includes('ETIMEDOUT') || 
+                            error.message.includes('ECONNREFUSED');
+      const isServerError = error.message.includes('HTTP error! Status: 5');
+      return isNetworkError || isServerError;
+    }
+  );
+  
+  console.log('✅ File loaded to ETL step successfully');
+  
+  // Log the operation
+  logUpload({
+    jobId: sanitizedJobId,
+    inputId: sanitizedInputId,
+    fileName,
+    fileSize,
+    status: 'success'
+  });
+  
+  return;
 }
 
 /**
@@ -147,42 +170,35 @@ async function loadFileToStep(jobId, inputId, filePath) {
  * @returns {Promise<Object>} Job status
  */
 async function submitJob(jobId) {
-  try {
-    console.log(`Submitting ETL job: ${jobId}`);
-    
-    const options = {
-      method: 'POST',
-      headers: getRequestHeaders()
-    };
-    
-    const result = await fetchWithRetry(
-      `${config.api.baseUrl}/api/public/v1/etl/jobs/${jobId}/submit`, 
-      options
-    );
-    
-    console.log('✅ Job submitted successfully');
-    
-    // Log the operation
-    logApiOperation({
-      jobId,
-      action: 'submit-job',
-      result
-    });
-    
-    return result;
-  } catch (err) {
-    console.error('❌ Error:', err.message);
-    
-    // Log error
-    logError({
-      jobId,
-      action: 'submit-job',
-      status: 'error',
-      error: err.message
-    });
-    
-    throw err;
+  // Sanitize the job ID to prevent injection attacks
+  const sanitizedJobId = sanitizeId(jobId);
+  
+  if (sanitizedJobId !== jobId) {
+    console.warn('Warning: Job ID contained potentially unsafe characters and was sanitized.');
   }
+  
+  console.log(`Submitting ETL job: ${sanitizedJobId}`);
+  
+  const options = {
+    method: 'POST',
+    headers: getRequestHeaders()
+  };
+  
+  // Use centralized response handler
+  const result = await handleApiResponse(
+    'submit-job',
+    async () => {
+      return await fetchWithRetry(
+        `${config.api.baseUrl}/api/public/v1/etl/jobs/${sanitizedJobId}/submit`, 
+        options
+      );
+    },
+    { jobId: sanitizedJobId }
+  );
+  
+  console.log('✅ Job submitted successfully');
+  
+  return result;
 }
 
 /**

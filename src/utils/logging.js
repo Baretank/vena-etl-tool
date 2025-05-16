@@ -11,7 +11,12 @@ const { config } = require('../config');
  */
 function ensureLogDirectory() {
   const logDir = config.logging.directory;
+  
+  // Security note: This operation uses non-literal file paths for the logging directory
+  // This is safe because the directory path comes from the fixed configuration, not user input
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
   if (!fs.existsSync(logDir)) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
     fs.mkdirSync(logDir, { recursive: true });
   }
 }
@@ -27,6 +32,9 @@ function logUpload(data) {
     ...data
   };
   const logPath = path.join(config.logging.directory, config.logging.uploadHistory);
+  
+  // Security note: This is a controlled file path from configuration
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
   fs.appendFileSync(logPath, JSON.stringify(logEntry) + '\n');
 }
 
@@ -41,6 +49,9 @@ function logJobOperation(data) {
     ...data
   };
   const logPath = path.join(config.logging.directory, config.logging.jobHistory);
+  
+  // Security note: This is a controlled file path from configuration
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
   fs.appendFileSync(logPath, JSON.stringify(logEntry) + '\n');
 }
 
@@ -55,6 +66,9 @@ function logApiOperation(data) {
     ...data
   };
   const logPath = path.join(config.logging.directory, config.logging.apiHistory);
+  
+  // Security note: This is a controlled file path from configuration
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
   fs.appendFileSync(logPath, JSON.stringify(logEntry) + '\n');
 }
 
@@ -69,6 +83,9 @@ function logError(data) {
     ...data
   };
   const logPath = path.join(config.logging.directory, config.logging.errorLogs);
+  
+  // Security note: This is a controlled file path from configuration
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
   fs.appendFileSync(logPath, JSON.stringify(logEntry) + '\n');
 }
 

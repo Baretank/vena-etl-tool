@@ -4,7 +4,10 @@
   "main": "import.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "import": "node import.js"
+    "import": "node import.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint --fix .",
+    "prepare": "husky"
   },
   "keywords": [],
   "author": "",
@@ -14,5 +17,13 @@
     "dotenv": "^16.5.0",
     "form-data": "^4.0.2",
     "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.26.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-security": "^3.0.1",
+    "globals": "^16.1.0",
+    "lint-staged": "^16.0.0"
   }
 }

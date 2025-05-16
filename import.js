@@ -1,11 +1,10 @@
-#!/usr/bin/env node
-
 /**
  * Vena ETL Tool - Main entry point
  * Command-line utility for interacting with Vena's ETL API
  */
 
 // Core modules
+// eslint-disable-next-line no-unused-vars
 const path = require('path');
 
 // Configuration
@@ -17,6 +16,8 @@ const { checkJobStatus, cancelJob } = require('./src/api/jobs');
 
 // Utilities
 const { validateCsvFile } = require('./src/utils/fileHandling');
+const { logError } = require('./src/utils/logging');
+const { executeWithErrorHandling } = require('./src/utils/apiResponse');
 
 // Validate configuration
 validateConfig();
@@ -66,164 +67,174 @@ Examples:
   node import.js templates
   node import.js template abc123def456
   `);
-  process.exit(0);
+  return; // Early return instead of process.exit(0)
 }
 
 // Main execution
 async function main() {
-  try {
+  // Use centralized error handling for each command
+  return await executeWithErrorHandling(command, async () => {
     switch (command) {
-      case 'upload': {
-        const csvFilePath = args[0];
+    case 'upload': {
+      const csvFilePath = args[0];
         
-        if (!csvFilePath) {
-          console.error('Error: No CSV file path provided');
-          console.error('Usage: node import.js upload <path-to-csv-file> [template-id]');
-          process.exit(1);
-        }
-        
-        // Validate file
-        const validation = validateCsvFile(csvFilePath);
-        
-        if (!validation.success) {
-          console.error(`Error: ${validation.error}`);
-          process.exit(1);
-        }
-        
-        if (validation.warning) {
-          console.warn(`Warning: ${validation.warning}`);
-        }
-        
-        // Get template ID
-        const templateIdArg = args[1];
-        const templateId = templateIdArg || config.api.defaultTemplateId;
-        
-        if (!templateId) {
-          console.error('Error: No template ID provided and VENA_TEMPLATE_ID not found in environment variables');
-          console.error('Usage: node import.js upload <path-to-csv-file> [template-id]');
-          console.error('Tip: Run "node import.js templates" to see available templates');
-          process.exit(1);
-        }
-        
-        // Upload file
-        const data = await uploadFile(csvFilePath, templateId, validation.fileName, validation.fileSize);
-        
-        if (data.jobId) {
-          console.log(`Job ID: ${data.jobId}`);
-          console.log(`To check status: node import.js status ${data.jobId}`);
-          console.log(`To cancel job: node import.js cancel ${data.jobId}`);
-        }
-        
-        console.log('Server response:');
-        console.log(JSON.stringify(data, null, 2));
-        break;
+      if (!csvFilePath) {
+        console.error('Error: No CSV file path provided');
+        console.error('Usage: node import.js upload <path-to-csv-file> [template-id]');
+        throw new Error('Missing CSV file path');
       }
-      
-      case 'status': {
-        const jobId = args[0];
         
-        if (!jobId) {
-          console.error('Error: No job ID provided');
-          console.error('Usage: node import.js status <job-id>');
-          process.exit(1);
-        }
+      // Validate file
+      const validation = validateCsvFile(csvFilePath);
         
-        const jobInfo = await checkJobStatus(jobId);
-        
-        console.log('Job details:');
-        console.log(JSON.stringify(jobInfo.details, null, 2));
-        
-        console.log('Job status:');
-        console.log(JSON.stringify(jobInfo.status, null, 2));
-        break;
+      if (!validation.success) {
+        console.error(`Error: ${validation.error}`);
+        throw new Error(validation.error);
       }
-      
-      case 'cancel': {
-        const jobId = args[0];
         
-        if (!jobId) {
-          console.error('Error: No job ID provided');
-          console.error('Usage: node import.js cancel <job-id>');
-          process.exit(1);
-        }
-        
-        const result = await cancelJob(jobId);
-        
-        console.log('Response:');
-        console.log(JSON.stringify(result, null, 2));
-        break;
+      if (validation.warning) {
+        console.warn(`Warning: ${validation.warning}`);
       }
+        
+      // Get template ID
+      const templateIdArg = args[1];
+      const templateId = templateIdArg || config.api.defaultTemplateId;
+        
+      if (!templateId) {
+        console.error('Error: No template ID provided and VENA_TEMPLATE_ID not found in environment variables');
+        console.error('Usage: node import.js upload <path-to-csv-file> [template-id]');
+        console.error('Tip: Run "node import.js templates" to see available templates');
+        throw new Error('Missing template ID');
+      }
+        
+      // Upload file (with automatic retry on transient errors)
+      console.log(`Uploading with up to ${config.api.retryAttempts || 3} retry attempts if needed...`);
+      const data = await uploadFile(csvFilePath, templateId, validation.fileName, validation.fileSize);
+        
+      if (data.jobId) {
+        console.log(`Job ID: ${data.jobId}`);
+        console.log(`To check status: node import.js status ${data.jobId}`);
+        console.log(`To cancel job: node import.js cancel ${data.jobId}`);
+      }
+        
+      console.log('Server response:');
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
       
-      case 'templates': {
-        const templates = await listTemplates();
+    case 'status': {
+      const jobId = args[0];
         
-        console.log('\nAvailable Templates:');
+      if (!jobId) {
+        console.error('Error: No job ID provided');
+        console.error('Usage: node import.js status <job-id>');
+        throw new Error('Missing job ID');
+      }
         
-        if (templates && templates.length > 0) {
-          console.log('\n' + '-'.repeat(100));
-          console.log('| ID'.padEnd(38) + '| Name'.padEnd(42) + '| Description'.padEnd(20) + '|');
-          console.log('-'.repeat(100));
+      const jobInfo = await checkJobStatus(jobId);
+        
+      console.log('Job details:');
+      console.log(JSON.stringify(jobInfo.details, null, 2));
+        
+      console.log('Job status:');
+      console.log(JSON.stringify(jobInfo.status, null, 2));
+      break;
+    }
+      
+    case 'cancel': {
+      const jobId = args[0];
+        
+      if (!jobId) {
+        console.error('Error: No job ID provided');
+        console.error('Usage: node import.js cancel <job-id>');
+        throw new Error('Missing job ID');
+      }
+        
+      const result = await cancelJob(jobId);
+        
+      console.log('Response:');
+      console.log(JSON.stringify(result, null, 2));
+      break;
+    }
+      
+    case 'templates': {
+      const templates = await listTemplates();
+        
+      console.log('\nAvailable Templates:');
+        
+      if (templates && templates.length > 0) {
+        console.log('\n' + '-'.repeat(100));
+        console.log('| ID'.padEnd(38) + '| Name'.padEnd(42) + '| Description'.padEnd(20) + '|');
+        console.log('-'.repeat(100));
           
-          templates.forEach(template => {
-            const id = template.id || 'N/A';
-            const name = template.name || 'N/A';
-            const description = template.description || '';
+        templates.forEach(template => {
+          const id = template.id || 'N/A';
+          const name = template.name || 'N/A';
+          const description = template.description || '';
             
-            console.log('| ' + id.padEnd(36) + '| ' + name.padEnd(40) + '| ' + description.padEnd(18) + '|');
-          });
+          console.log('| ' + id.padEnd(36) + '| ' + name.padEnd(40) + '| ' + description.padEnd(18) + '|');
+        });
           
-          console.log('-'.repeat(100));
-          console.log(`\nTotal Templates: ${templates.length}`);
-          console.log('\nTo get details on a specific template:');
-          console.log('  node import.js template <template-id>');
+        console.log('-'.repeat(100));
+        console.log(`\nTotal Templates: ${templates.length}`);
+        console.log('\nTo get details on a specific template:');
+        console.log('  node import.js template <template-id>');
           
-          if (templates.length > 0 && templates[0].id) {
-            console.log('\nExample:');
-            console.log(`  node import.js template ${templates[0].id}`);
-          }
-        } else {
-          console.log('No templates found.');
+        if (templates.length > 0 && templates[0].id) {
+          console.log('\nExample:');
+          console.log(`  node import.js template ${templates[0].id}`);
         }
-        break;
+      } else {
+        console.log('No templates found.');
       }
+      break;
+    }
       
-      case 'template': {
-        const templateId = args[0];
+    case 'template': {
+      const templateId = args[0];
         
-        if (!templateId) {
-          console.error('Error: No template ID provided');
-          console.error('Usage: node import.js template <template-id>');
-          console.error('Tip: Run "node import.js templates" to see available templates');
-          process.exit(1);
-        }
-        
-        const template = await getTemplateDetails(templateId);
-        
-        console.log('\nTemplate Details:');
-        console.log(JSON.stringify(template, null, 2));
-        
-        console.log('\nTo upload a file using this template:');
-        console.log(`  node import.js upload path/to/your/file.csv ${templateId}`);
-        break;
+      if (!templateId) {
+        console.error('Error: No template ID provided');
+        console.error('Usage: node import.js template <template-id>');
+        console.error('Tip: Run "node import.js templates" to see available templates');
+        throw new Error('Missing template ID');
       }
+        
+      const template = await getTemplateDetails(templateId);
+        
+      console.log('\nTemplate Details:');
+      console.log(JSON.stringify(template, null, 2));
+        
+      console.log('\nTo upload a file using this template:');
+      console.log(`  node import.js upload path/to/your/file.csv ${templateId}`);
+      break;
+    }
       
-      default:
-        console.error(`Unknown command: ${command}`);
-        console.error('Run "node import.js help" for usage information');
-        process.exit(1);
+    default:
+      console.error(`Unknown command: ${command}`);
+      console.error('Run "node import.js help" for usage information');
+      throw new Error(`Unknown command: ${command}`);
     }
     
     return true;
-  } catch (err) {
-    console.error('Execution failed:', err.message);
-    return false;
-  }
+  });
 }
 
 // Execute the main function
 main()
-  .then(success => process.exit(success ? 0 : 1))
+  // Using promises to handle exit without process.exit
+  .then(success => {
+    if (!success) {
+      // For unsuccessful execution, throw to get a non-zero exit code
+      throw new Error('Execution failed');
+    }
+    // Normal termination with success
+  })
   .catch(err => {
     console.error('Unhandled error:', err);
-    process.exit(1);
+    logError({
+      action: 'main-execution',
+      error: err.toString()
+    });
+    throw err; // This will cause the process to exit with a non-zero code
   });

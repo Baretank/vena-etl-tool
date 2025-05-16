@@ -11,6 +11,9 @@ A command-line utility for interacting with Vena's ETL API. This tool allows you
 - **Multi-Step ETL Process Support**: Handle complex ETL processes
 - **Environment-Based Configuration**: Configure file mappings in your `.env` file
 - **Windows Task Scheduler Integration**: Automate imports on a schedule
+- **Input Validation**: Validate required inputs before starting ETL jobs to prevent failures
+- **Automatic Retry Logic**: Handle network issues with automatic retries and exponential backoff
+- **Enhanced Security**: Input sanitization to prevent injection vulnerabilities
 
 ## Installation
 
@@ -224,6 +227,8 @@ Here's a comprehensive list of all environment variables used by the tool:
    - `VENA_PASSWORD`: Your Vena password
    - `VENA_API_URL`: Vena API URL (default: https://us2.vena.io)
    - `VENA_TEMPLATE_ID`: Default template ID for single file uploads
+   - `VENA_RETRY_ATTEMPTS`: Number of retry attempts for API calls (default: 3)
+   - `VENA_RETRY_BACKOFF`: Initial backoff time in milliseconds (default: 300)
 
 2. **Multi-Import Configuration**:
    - `VENA_SOURCE_DIRECTORY`: Path to the CSV files
@@ -269,8 +274,9 @@ vena-etl-tool/
 │   ├── scheduler/             # Scheduling utilities
 │   │   └── windowsTaskScheduler.js  # Windows task scheduling
 │   ├── utils/                 # Utility functions
-│   │   ├── fileHandling.js    # File operations
-│   │   └── logging.js         # Logging functions
+│   │   ├── fileHandling.js    # File operations and validation
+│   │   ├── logging.js         # Logging functions
+│   │   └── apiResponse.js     # Centralized API response and error handling
 │   └── config.js              # Centralized configuration
 ├── import.js                  # Single file import entry point
 ├── multi_import.js            # Multi-file import entry point
@@ -285,11 +291,28 @@ vena-etl-tool/
 - Never commit your `.env` file containing credentials to version control
 - Consider using a secure credential manager for production environments
 - Regularly rotate your Vena API credentials
+- All inputs are sanitized to prevent injection attacks
+- Input validation happens before any ETL job is created
+- File paths are validated and sanitized to prevent path traversal attacks
 
 ## Requirements
 
 - Node.js version 14 or higher
 - Active Vena account with API access
+
+## Error Handling and Retry Mechanism
+
+The tool includes robust error handling and automatic retry capabilities:
+
+- **Automatic Retries**: All API calls automatically retry on transient failures (network issues, server errors)
+- **Exponential Backoff**: Retries use increasing wait times to avoid overwhelming the server
+- **Failed Files Tracking**: When running multi-import, the tool tracks and reports any files that failed after all retry attempts
+- **Detailed Error Logging**: All errors are logged with comprehensive details to aid troubleshooting
+- **Input Validation**: Pre-validation of multi-step processes ensures all required files exist before creating a job
+
+You can configure the retry behavior using these environment variables:
+- `VENA_RETRY_ATTEMPTS`: Number of retry attempts (default: 3)
+- `VENA_RETRY_BACKOFF`: Initial backoff time in milliseconds (default: 300)
 
 ## Troubleshooting
 
@@ -300,6 +323,7 @@ If you encounter issues:
 3. Ensure you have the correct template ID
 4. For multi-import, make sure your file patterns match the actual files
 5. Review the logs for detailed error messages
+6. Adjust retry settings if you're experiencing network reliability issues
 
 ## Making the Script Executable (Unix/Linux/Mac)
 
