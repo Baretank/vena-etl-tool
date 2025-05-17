@@ -28,6 +28,10 @@ const {
 } = require('./src/utils/fileHandling');
 const { logError } = require('./src/utils/logging');
 const { retryOperation, executeWithErrorHandling } = require('./src/utils/apiResponse');
+const { createUploadController } = require('./src/utils/uploadController');
+
+// Store active uploads for potential abort
+const activeUploads = new Map();
 
 // Scheduler
 const { 
@@ -47,6 +51,28 @@ let command = 'run'; // Default command
 if (args.length > 0 && ['run', 'schedule', 'check-schedule', 'delete-schedule', 'help'].includes(args[0])) {
   command = args[0];
 }
+
+// Handle termination signals
+process.on('SIGINT', async () => {
+  console.log('\n\nReceived interrupt signal. Cleaning up active uploads...');
+  
+  // Abort all active uploads
+  const abortPromises = [];
+  activeUploads.forEach((controller, id) => {
+    console.log(`Aborting upload: ${id}`);
+    controller.abort(new Error('User interrupted process'));
+    abortPromises.push(new Promise(resolve => setTimeout(resolve, 100))); // Small delay for cleanup
+  });
+  
+  // Wait a moment for cleanup to complete
+  if (abortPromises.length > 0) {
+    console.log(`Waiting for ${abortPromises.length} uploads to abort...`);
+    await Promise.all(abortPromises);
+  }
+  
+  console.log('Clean-up complete. Exiting...');
+  process.exit(1);
+});
 
 // Display help
 if (command === 'help') {
@@ -221,6 +247,12 @@ function loadEnvConfiguration() {
  */
 async function uploadFileWithRetry(filePath, templateId, maxRetries = 3) {
   const fileName = path.basename(filePath);
+  const uploadId = `${fileName}-${Date.now()}`;
+  
+  // Create upload controller for abort handling and timeouts
+  const controller = createUploadController(uploadId, config.api.uploadTimeout);
+  // Register with active uploads for potential abort
+  activeUploads.set(uploadId, controller);
   
   try {
     // Validate file first
@@ -240,23 +272,40 @@ async function uploadFileWithRetry(filePath, templateId, maxRetries = 3) {
     
     const result = await retryOperation(
       async () => {
-        return await uploadFile(filePath, templateId, validation.fileName, validation.fileSize);
+        // Check if already aborted
+        if (controller.signal.aborted) {
+          throw new DOMException('The operation was aborted', 'AbortError');
+        }
+        
+        return await uploadFile(filePath, templateId, validation.fileName, validation.fileSize, controller.signal);
       },
       maxRetries,
       1000, // Initial 1 second backoff
       (error) => {
+        // Don't retry if aborted
+        if (error.name === 'AbortError') {
+          return false;
+        }
+        
         // Retry on network errors or 5xx server errors
         const isNetworkError = error.message.includes('ECONNRESET') || 
                               error.message.includes('ETIMEDOUT') ||
                               error.message.includes('ECONNREFUSED');
         const isServerError = error.message.includes('HTTP error! Status: 5');
         return isNetworkError || isServerError;
-      }
+      },
+      controller.signal
     );
     
     console.log(`✅ Upload successful. Job ID: ${result.jobId}`);
     return { success: true, result };
   } catch (err) {
+    // Check if this was an abort
+    if (err.name === 'AbortError') {
+      console.log(`Upload of ${fileName} was aborted: ${err.message || 'Manual abort'}`);
+      return { success: false, aborted: true, error: err.message };
+    }
+    
     console.error(`❌ Error processing file ${fileName} after ${maxRetries} attempts:`, err.message);
     logError({
       action: 'upload-file-with-retry',
@@ -266,6 +315,10 @@ async function uploadFileWithRetry(filePath, templateId, maxRetries = 3) {
       error: err.message
     });
     return { success: false, error: err.message };
+  } finally {
+    // Always clean up and remove from active uploads
+    controller.cleanup();
+    activeUploads.delete(uploadId);
   }
 }
 
@@ -318,6 +371,12 @@ function getMatchingFiles(directory, pattern) {
  */
 async function loadFileToStepWithRetry(jobId, inputId, filePath, maxRetries = 3) {
   const fileName = path.basename(filePath);
+  const uploadId = `${fileName}-to-step-${inputId}-${Date.now()}`;
+  
+  // Create upload controller for abort handling and timeouts
+  const controller = createUploadController(uploadId, config.api.uploadTimeout);
+  // Register with active uploads for potential abort
+  activeUploads.set(uploadId, controller);
   
   try {
     // Validate file first
@@ -333,23 +392,40 @@ async function loadFileToStepWithRetry(jobId, inputId, filePath, maxRetries = 3)
     
     await retryOperation(
       async () => {
-        return await loadFileToStep(jobId, inputId, filePath);
+        // Check if already aborted
+        if (controller.signal.aborted) {
+          throw new DOMException('The operation was aborted', 'AbortError');
+        }
+        
+        return await loadFileToStep(jobId, inputId, filePath, controller.signal);
       },
       maxRetries,
       1000, // Initial 1 second backoff
       (error) => {
+        // Don't retry if aborted
+        if (error.name === 'AbortError') {
+          return false;
+        }
+        
         // Retry on network errors or 5xx server errors
         const isNetworkError = error.message.includes('ECONNRESET') || 
                               error.message.includes('ETIMEDOUT') ||
                               error.message.includes('ECONNREFUSED');
         const isServerError = error.message.includes('HTTP error! Status: 5');
         return isNetworkError || isServerError;
-      }
+      },
+      controller.signal
     );
     
     console.log('✅ File loaded to step successfully');
     return { success: true };
   } catch (err) {
+    // Check if this was an abort
+    if (err.name === 'AbortError') {
+      console.log(`Loading of ${fileName} to step ${inputId} was aborted: ${err.message || 'Manual abort'}`);
+      return { success: false, aborted: true, error: err.message };
+    }
+    
     console.error(`❌ Error loading file ${fileName} to step ${inputId} after ${maxRetries} attempts:`, err.message);
     logError({
       action: 'load-file-to-step-with-retry',
@@ -360,6 +436,10 @@ async function loadFileToStepWithRetry(jobId, inputId, filePath, maxRetries = 3)
       error: err.message
     });
     return { success: false, error: err.message };
+  } finally {
+    // Always clean up and remove from active uploads
+    controller.cleanup();
+    activeUploads.delete(uploadId);
   }
 }
 
@@ -435,6 +515,7 @@ async function executeMultiUpload() {
       if (mapping.processType === 'single') {
         // Track files with failed uploads for retry
         const failedFiles = [];
+        const abortedFiles = [];
         const maxRetries = config.api.retryAttempts || 3; // Use config or default
         
         // Process each file individually with standard upload
@@ -449,6 +530,14 @@ async function executeMultiUpload() {
           if (result.success) {
             const data = result.result;
             console.log(`To check status: node import.js status ${data.jobId}`);
+          } else if (result.aborted) {
+            // Add to aborted files list
+            abortedFiles.push({
+              file,
+              filePath,
+              templateId: mapping.templateId,
+              reason: result.error || 'Manual abort'
+            });
           } else {
             // Add to failed files list for potential manual retry
             failedFiles.push({
@@ -458,6 +547,28 @@ async function executeMultiUpload() {
               error: result.error
             });
           }
+          
+          // Check if the process has been interrupted (check if there are active aborts)
+          if (activeUploads.size === 0 && Array.from(activeUploads.values()).some(c => c.signal.aborted)) {
+            console.log('\nProcess interrupted. Stopping further uploads.');
+            break;
+          }
+        }
+        
+        // Display summary of aborted files
+        if (abortedFiles.length > 0) {
+          console.log(`\n⚠️ ${abortedFiles.length} file(s) were aborted during upload:`);
+          abortedFiles.forEach((abortedFile, index) => {
+            console.log(`  ${index + 1}. ${abortedFile.file} - Reason: ${abortedFile.reason}`);
+          });
+          
+          // Store aborted files for reference
+          logError({
+            action: 'aborted-files-summary',
+            count: abortedFiles.length,
+            files: abortedFiles.map(f => f.file),
+            templateId: mapping.templateId
+          });
         }
         
         // Display summary of failed files
@@ -511,9 +622,13 @@ async function executeMultiUpload() {
           
           console.log(`Job created with ID: ${job.id}`);
           
-          // Keep track of failed step files
+          // Keep track of failed and aborted step files
           const failedSteps = [];
+          const abortedSteps = [];
           const maxRetries = config.api.retryAttempts || 3; // Use config or default
+
+          // Create job-level controller for coordinated abort
+          const jobController = createUploadController(`job-${job.id}`, config.api.uploadTimeout * 2);
 
           // Process each step
           for (const step of mapping.steps) {
@@ -531,13 +646,54 @@ async function executeMultiUpload() {
             const result = await loadFileToStepWithRetry(job.id, step.inputId, stepFilePath, maxRetries);
             
             if (!result.success) {
-              // Add to failed steps list
-              failedSteps.push({
-                inputId: step.inputId,
-                file: stepFile,
-                error: result.error
-              });
+              if (result.aborted) {
+                // Add to aborted steps list
+                abortedSteps.push({
+                  inputId: step.inputId,
+                  file: stepFile,
+                  reason: result.error || 'Manual abort'
+                });
+                
+                // Abort the entire job if a step was aborted
+                jobController.abort(new Error('Step upload was aborted'));
+                break;
+              } else {
+                // Add to failed steps list
+                failedSteps.push({
+                  inputId: step.inputId,
+                  file: stepFile,
+                  error: result.error
+                });
+              }
             }
+            
+            // Check if the job process has been aborted
+            if (jobController.signal.aborted) {
+              console.log(`\nJob processing for ${job.id} has been aborted. Skipping remaining steps.`);
+              break;
+            }
+          }
+          
+          // Display summary of aborted step files
+          if (abortedSteps.length > 0) {
+            console.log(`\n⚠️ ${abortedSteps.length} step file(s) were aborted during upload.`);
+            console.log('The job will not be submitted.');
+            
+            abortedSteps.forEach((abortedStep, index) => {
+              console.log(`  ${index + 1}. Step ${abortedStep.inputId}: ${abortedStep.file} - Reason: ${abortedStep.reason}`);
+            });
+            
+            // Log the abort
+            logError({
+              action: 'multi-step-aborted-files',
+              jobId: job.id,
+              count: abortedSteps.length,
+              steps: abortedSteps.map(s => ({ inputId: s.inputId, file: s.file, reason: s.reason })),
+              templateId: mapping.templateId
+            });
+            
+            // Skip to next mapping since we aborted
+            continue;
           }
           
           // Display summary of failed step files
@@ -573,12 +729,31 @@ async function executeMultiUpload() {
             }
           }
           
-          // Submit job
+          // Submit job with abort signal from job controller
           console.log('\nSubmitting job for processing...');
-          const result = await submitJob(job.id);
-          
-          console.log(`✅ Job submitted successfully. Status: ${result.status}`);
-          console.log(`To check status: node import.js status ${job.id}`);
+          try {
+            const result = await submitJob(job.id, jobController.signal);
+            
+            console.log(`✅ Job submitted successfully. Status: ${result.status}`);
+            console.log(`To check status: node import.js status ${job.id}`);
+          } catch (err) {
+            if (err.name === 'AbortError') {
+              console.log(`Job submission for ${job.id} was aborted.`);
+            } else {
+              console.error(`❌ Error submitting job: ${err.message}`);
+              
+              // Log the error
+              logError({
+                action: 'submit-job-error',
+                jobId: job.id,
+                templateId: mapping.templateId,
+                error: err.message
+              });
+            }
+          } finally {
+            // Clean up job controller
+            jobController.cleanup();
+          }
         } catch (err) {
           console.error('❌ Error in multi-step process:', err.message);
           logError({
@@ -629,21 +804,6 @@ async function main() {
         console.log('\nTo view details, run this command as Administrator:');
         console.log(`schtasks /query /tn "${taskName}" /fo list /v`);
       } else {
-        console.log(`❌ Scheduled task "${taskName}" does not exist.`);
-        console.log('\nTo create the task, run:');
-        console.log('node multi_import.js schedule');
-      }
-      
-      return true;
-    }
-    
-    case 'delete-schedule': {
-      console.log(`\n=== Deleting scheduled task: ${taskName} ===\n`);
-      
-      // First check if the task exists
-      const exists = await checkTaskExists(taskName);
-      
-      if (!exists) {
         console.log(`❌ Scheduled task "${taskName}" does not exist.`);
         return true;
       }

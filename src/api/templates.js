@@ -7,6 +7,9 @@ const { config } = require('../config');
 const { getRequestHeaders } = require('../auth');
 const { readCsvFile } = require('../utils/fileHandling');
 const { handleApiResponse, retryOperation } = require('../utils/apiResponse');
+const fs = require('fs');
+const path = require('path')
+const { createUploadController } = require('../utils/uploadController');
 
 /**
  * Generic function for API calls with retry logic
@@ -16,14 +19,27 @@ const { handleApiResponse, retryOperation } = require('../utils/apiResponse');
  * @param {number} backoff Backoff time in ms (default: config value)
  * @returns {Promise<Object>} API response as JSON
  */
-async function fetchWithRetry(url, options, retries, backoff) {
+async function fetchWithRetry(url, options, retries, backoff, signal) {
   const retriesCount = retries ?? config.api.retryAttempts;
   const backoffTime = backoff ?? config.api.retryBackoff;
   
   // Use the centralized retry utility
   return await retryOperation(
     async () => {
-      const response = await fetch(url, options);
+      // Check if already aborted
+      if (signal && signal.aborted) {
+        throw new DOMException('The operation was aborted', 'AbortError');
+      }
+      
+      // Create a local options copy to modify
+      const localOptions = { ...options };
+      
+      // Use the provided signal if any
+      if (signal) {
+        localOptions.signal = signal;
+      }
+      
+      const response = await fetch(url, localOptions);
       
       if (!response.ok) {
         let errorDetails = '';
@@ -46,10 +62,15 @@ async function fetchWithRetry(url, options, retries, backoff) {
     retriesCount,
     backoffTime,
     (error) => {
+      // Don't retry if aborted
+      if (error.name === 'AbortError') {
+        return false;
+      }
+      
       // Only retry on network errors or server errors (5xx)
       const isNetworkError = error.message.includes('ECONNRESET') || 
-                            error.message.includes('ETIMEDOUT') ||
-                            error.message.includes('ECONNREFUSED');
+                          error.message.includes('ETIMEDOUT') ||
+                          error.message.includes('ECONNREFUSED');
       const isServerError = error.message.includes('HTTP error! Status: 5');
       return isNetworkError || isServerError;
     }
@@ -127,6 +148,12 @@ async function getTemplateDetails(templateId) {
 async function uploadFile(csvFilePath, templateId, fileName, fileSize) {
   console.log(`Preparing to upload ${fileName} (${fileSize}) to Vena template ID: ${templateId}`);
   
+  // Create upload controller for abort handling and timeouts
+  const controller = createUploadController(
+    `${fileName}-to-${templateId}`, 
+    config.api.uploadTimeout
+  );
+  
   // Create form data
   const form = new FormData();
   
@@ -138,8 +165,40 @@ async function uploadFile(csvFilePath, templateId, fileName, fileSize) {
   await tracker.init();
   
   // Create a readable stream instead of loading entire file
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   const fileStream = fs.createReadStream(csvFilePath);
+  
+  // Track stream state
+  let streamClosed = false;
+  
+  // Create a function to clean up resources
+  const cleanupResources = () => {
+    if (!streamClosed) {
+      try {
+        fileStream.destroy(); // Force close the stream
+        streamClosed = true;
+      } catch (err) {
+        console.error('Error closing file stream:', err.message);
+      }
+      
+      // Always stop the progress tracker
+      tracker.stop();
+      
+      // Clean up controller
+      controller.cleanup();
+    }
+  };
+  
+  // Handle stream errors
+  fileStream.on('error', (err) => {
+    console.error(`Stream error: ${err.message}`);
+    cleanupResources();
+  });
+  
+  // Handle aborts
+  controller.signal.addEventListener('abort', () => {
+    console.log(`Upload aborted: ${controller.signal.reason?.message || 'Manual abort'}`);
+    cleanupResources();
+  });
   
   // Track upload progress by monitoring the stream's bytes read
   let bytesUploaded = 0;
@@ -147,6 +206,16 @@ async function uploadFile(csvFilePath, templateId, fileName, fileSize) {
   fileStream.on('data', (chunk) => {
     bytesUploaded += chunk.length;
     tracker.update(bytesUploaded);
+    
+    // Check if aborted
+    if (controller.signal.aborted) {
+      fileStream.destroy();
+      streamClosed = true;
+    }
+  });
+  
+  fileStream.on('end', () => {
+    streamClosed = true;
   });
   
   // Start progress tracking
@@ -164,8 +233,7 @@ async function uploadFile(csvFilePath, templateId, fileName, fileSize) {
     method: 'POST',
     headers: getRequestHeaders(),
     body: form,
-    // Set timeout from configuration
-    timeout: config.api.uploadTimeout
+    signal: controller.signal
   };
   
   console.log('Uploading file to Vena...');
@@ -181,7 +249,10 @@ async function uploadFile(csvFilePath, templateId, fileName, fileSize) {
       async () => {
         return await fetchWithRetry(
           `${config.api.baseUrl}/api/public/v1/etl/templates/${templateId}/startWithFile`, 
-          options
+          options,
+          undefined, // Use default retries
+          undefined, // Use default backoff
+          controller.signal // Pass signal to fetchWithRetry
         );
       },
       {
@@ -200,11 +271,16 @@ async function uploadFile(csvFilePath, templateId, fileName, fileSize) {
     
     return data;
   } catch (err) {
-    console.error(`❌ Upload failed after ${((new Date() - startTime) / 1000).toFixed(2)} seconds.`);
+    // Check if this was an abort
+    if (err.name === 'AbortError') {
+      console.error(`Upload aborted: ${err.message}`);
+    } else {
+      console.error(`❌ Upload failed after ${((new Date() - startTime) / 1000).toFixed(2)} seconds: ${err.message}`);
+    }
     throw err;
   } finally {
-    // Always stop the progress tracker
-    tracker.stop();
+    // Always clean up resources
+    cleanupResources();
   }
 }
 

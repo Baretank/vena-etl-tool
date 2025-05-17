@@ -63,23 +63,60 @@ async function handleApiResponse(action, apiCall, params = {}, isUpload = false)
  * @param {number} retries Maximum number of retries
  * @param {number} backoff Initial backoff time in ms
  * @param {Function} shouldRetry Function that determines if retry should be attempted based on error
+ * @param {AbortSignal} signal Optional abort signal
  * @returns {Promise<any>} Operation result
  */
-async function retryOperation(operation, retries = 3, backoff = 300, shouldRetry = () => true) {
+async function retryOperation(operation, retries = 3, backoff = 300, shouldRetry = () => true, signal) {
   try {
+    // Check if already aborted
+    if (signal && signal.aborted) {
+      throw new DOMException('The operation was aborted', 'AbortError');
+    }
+    
     return await operation();
   } catch (error) {
+    // Always fail fast on abort
+    if (error.name === 'AbortError') {
+      throw error;
+    }
+    
     // Check if we should retry and have retries left
     if (retries <= 0 || !shouldRetry(error)) {
       throw error;
     }
     
-    // Calculate backoff with exponential increase
-    console.log(`Operation failed. Retrying in ${backoff}ms... (${retries} retries left)`);
-    await new Promise(resolve => setTimeout(resolve, backoff));
+    // Create a promise that resolves after the backoff time or rejects if aborted
+    await new Promise((resolve, reject) => {
+      // Calculate backoff with exponential increase
+      console.log(`Operation failed. Retrying in ${backoff}ms... (${retries} retries left)`);
+      
+      // Set timeout for backoff
+      const timeoutId = setTimeout(resolve, backoff);
+      
+      // Add abort handler if signal provided
+      if (signal) {
+        const abortHandler = () => {
+          clearTimeout(timeoutId);
+          reject(new DOMException('Retry aborted', 'AbortError'));
+        };
+        
+        // If already aborted, call handler immediately
+        if (signal.aborted) {
+          abortHandler();
+        } else {
+          // Otherwise listen for abort event
+          signal.addEventListener('abort', abortHandler, { once: true });
+          
+          // Clean up event listener when timeout resolves
+          setTimeout(() => {
+            signal.removeEventListener('abort', abortHandler);
+          }, backoff);
+        }
+      }
+    });
     
     // Retry with decremented count and increased backoff
-    return retryOperation(operation, retries - 1, backoff * 2, shouldRetry);
+    return retryOperation(operation, retries - 1, backoff * 2, shouldRetry, signal);
   }
 }
 

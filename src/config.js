@@ -13,6 +13,7 @@ const config = {
     // New settings for streaming uploads
     uploadTimeout: parseInt(process.env.VENA_UPLOAD_TIMEOUT) || 3600000, // 1 hour default
     progressInterval: parseInt(process.env.VENA_PROGRESS_INTERVAL) || 30000, // 30 seconds
+    abortOnTimeout: process.env.VENA_ABORT_ON_TIMEOUT !== 'false', // Default true
   },
   auth: {
     username: process.env.VENA_USERNAME,
