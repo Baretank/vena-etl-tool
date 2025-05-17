@@ -52,17 +52,33 @@ This document outlines future improvements for the Vena ETL Tool, organized by p
      - Cleanup of resources to prevent memory leaks
    - Impact: Enables reliable uploads of files of any size while maintaining memory efficiency.
 
-9. **Improve Error Objects**
-   - Problem: Current error handling mainly logs messages but doesn't create structured error objects.
-   - Solution: Use a more structured approach to error handling with error types and codes.
-   - Impact: Makes debugging easier and error handling more consistent.
+9. ✅ **Enhance Streaming Upload Reliability** (COMPLETED)
+   - Problem: Basic streaming implementation needed additional resilience for various network conditions.
+   - Solution: Implemented advanced streaming features:
+     - Adaptive backpressure that adjusts based on historical upload rates
+     - Stall detection to identify and report uploads that stop progressing
+     - Memory monitoring with warning and critical thresholds
+     - Enhanced error classification with detailed error types
+     - Graceful termination handling for clean process exits
+     - Network latency measurement for diagnostics
+     - Improved time remaining calculations
+   - Impact: Dramatically improves reliability for large uploads in challenging network environments.
 
-10. **Add JSDoc Comments**
+10. ✅ **Improve Error Objects** (PARTIALLY COMPLETED)
+   - Problem: Current error handling mainly logs messages but doesn't create structured error objects.
+   - Solution: Implemented enhanced error classification in streaming uploads with:
+     - Error type detection and classification (file_not_found, permission_denied, etc.)
+     - Recoverability indicators to guide retry behavior
+     - Additional context in error logs (file information, error codes)
+   - Status: Completed for streaming uploads; could be extended to other parts of the system
+   - Impact: Makes debugging easier, error handling more consistent, and improves diagnostics
+
+11. **Add JSDoc Comments**
    - Problem: While there are some function comments, they aren't in JSDoc format which could help with IDE integration.
    - Solution: Convert comments to JSDoc format for better tooling support.
    - Impact: Improves developer experience and documentation.
 
-11. **Consider Using ES Modules**
+12. **Consider Using ES Modules**
     - Problem: The codebase uses CommonJS modules, but ES modules would provide better encapsulation.
     - Solution: Consider migrating to ES modules for better code organization.
     - Impact: Long-term code organization improvement, but requires significant refactoring.
