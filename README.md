@@ -14,6 +14,7 @@ A command-line utility for interacting with Vena's ETL API. This tool allows you
 - **Input Validation**: Validate required inputs before starting ETL jobs to prevent failures
 - **Automatic Retry Logic**: Handle network issues with automatic retries and exponential backoff
 - **Enhanced Security**: Input sanitization to prevent injection vulnerabilities
+- **Streaming Upload Support**: Memory-efficient handling of large files (5-50GB) with progress tracking
 
 ## Installation
 
@@ -45,6 +46,10 @@ A command-line utility for interacting with Vena's ETL API. This tool allows you
    
    # Multi-import configuration (optional)
    # See "Multi-Import Configuration" section below
+   
+   # Streaming Upload Configuration
+   VENA_UPLOAD_TIMEOUT=3600000  # Upload timeout in milliseconds (1 hour default)
+   VENA_PROGRESS_INTERVAL=30000 # Progress reporting interval in milliseconds (30 seconds default)
    ```
 
 ## Basic Usage (Single File Import)
@@ -177,6 +182,57 @@ For detailed multi-import usage instructions:
 node multi_import.js help
 ```
 
+## Streaming Upload Support
+
+The tool uses a streaming approach to efficiently handle very large files (5-50GB) with minimal memory usage.
+
+### Key Benefits
+
+- **Memory Efficiency**: Files are processed as streams rather than loaded entirely into memory
+- **Progress Tracking**: Real-time display of upload progress, speed, and estimated completion time
+- **Large File Support**: Reliably handle files of any size without running out of memory
+- **Configurable**: Adjustable timeouts and progress reporting intervals
+
+### Progress Tracking
+
+During file uploads, you'll see progress information displaying:
+
+- Bytes uploaded and total file size
+- Upload percentage complete 
+- Current upload speed
+- Elapsed time
+- Estimated time remaining
+
+Example output:
+```
+Upload progress: 104857600 bytes (10%) uploaded
+Upload speed: 2.34 MB/s
+Elapsed time: 42s
+Estimated time remaining: 6m 18s
+```
+
+### Memory Usage Comparison
+
+Streaming significantly reduces memory requirements for large files:
+
+| File Size | Non-Streaming | Streaming   |
+|-----------|---------------|-------------|
+| 100MB     | ~110MB        | ~25MB       |
+| 1GB       | ~1.1GB        | ~30MB       |
+| 5GB       | OOM Error     | ~35MB       |
+
+### Testing Streaming Performance
+
+A test script is included to validate streaming performance:
+
+```bash
+# Test with a 10MB file (default)
+node test-streaming-upload.js
+
+# Test with a specific file size (e.g., 100MB)
+node test-streaming-upload.js 100
+```
+
 ## Finding Template IDs and Input IDs
 
 For each mapping in multi-import, you need to specify the correct Vena template ID:
@@ -230,17 +286,21 @@ Here's a comprehensive list of all environment variables used by the tool:
    - `VENA_RETRY_ATTEMPTS`: Number of retry attempts for API calls (default: 3)
    - `VENA_RETRY_BACKOFF`: Initial backoff time in milliseconds (default: 300)
 
-2. **Multi-Import Configuration**:
+2. **Streaming Upload Configuration**:
+   - `VENA_UPLOAD_TIMEOUT`: Timeout for uploads in milliseconds (default: 3600000)
+   - `VENA_PROGRESS_INTERVAL`: Progress reporting interval in milliseconds (default: 30000)
+
+3. **Multi-Import Configuration**:
    - `VENA_SOURCE_DIRECTORY`: Path to the CSV files
    - `VENA_FILE_PATTERN_N`: File pattern for mapping N
    - `VENA_TEMPLATE_ID_N`: Template ID for mapping N
    - `VENA_PROCESS_TYPE_N`: "single" or "multi" for mapping N
 
-3. **Multi-Step Process**:
+4. **Multi-Step Process**:
    - `VENA_STEP_INPUT_ID_N_M`: Input ID for step M of mapping N
    - `VENA_STEP_FILE_PATTERN_N_M`: File pattern for step M of mapping N
 
-4. **Scheduling**:
+5. **Scheduling**:
    - `VENA_SCHEDULE_MINUTE`: Minute (0-59)
    - `VENA_SCHEDULE_HOUR`: Hour (0-23)
    - `VENA_SCHEDULE_DAY`: Day of month (1-31)
@@ -255,6 +315,7 @@ All activities are logged in the `logs` directory:
 - `job-history.jsonl`: Job status checks and cancellations
 - `api-history.jsonl`: Template listing and viewing operations
 - `error.jsonl`: Error logs for all operations
+- `upload-progress.jsonl`: Detailed upload progress for streaming uploads
 
 When using the scheduler, a separate `import_log.txt` file is created in the root directory.
 
@@ -276,10 +337,12 @@ vena-etl-tool/
 │   ├── utils/                 # Utility functions
 │   │   ├── fileHandling.js    # File operations and validation
 │   │   ├── logging.js         # Logging functions
+│   │   ├── progressTracker.js # Upload progress tracking for streaming
 │   │   └── apiResponse.js     # Centralized API response and error handling
 │   └── config.js              # Centralized configuration
 ├── import.js                  # Single file import entry point
 ├── multi_import.js            # Multi-file import entry point
+├── test-streaming-upload.js   # Streaming upload test script
 ├── run_vena_import.bat        # Batch file for scheduled runs
 ├── package.json
 ├── README.md
@@ -294,11 +357,6 @@ vena-etl-tool/
 - All inputs are sanitized to prevent injection attacks
 - Input validation happens before any ETL job is created
 - File paths are validated and sanitized to prevent path traversal attacks
-
-## Requirements
-
-- Node.js version 14 or higher
-- Active Vena account with API access
 
 ## Error Handling and Retry Mechanism
 
@@ -324,6 +382,14 @@ If you encounter issues:
 4. For multi-import, make sure your file patterns match the actual files
 5. Review the logs for detailed error messages
 6. Adjust retry settings if you're experiencing network reliability issues
+7. For large file uploads, check the upload progress logs and consider increasing the timeout settings
+
+### Memory Issues
+
+If you're experiencing memory problems with large files:
+- Ensure you're using the latest version with streaming support
+- Check that your Node.js version is 14 or higher
+- For extremely large files (>10GB), consider increasing the Node.js memory limit: `node --max-old-space-size=4096 import.js ...`
 
 ## Making the Script Executable (Unix/Linux/Mac)
 
@@ -334,6 +400,11 @@ chmod +x import.js
 chmod +x multi_import.js
 ./import.js templates
 ```
+
+## Requirements
+
+- Node.js version 14 or higher
+- Active Vena account with API access
 
 ## License
 

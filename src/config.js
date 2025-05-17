@@ -9,7 +9,10 @@ const config = {
     baseUrl: process.env.VENA_API_URL || 'https://us2.vena.io',
     retryAttempts: parseInt(process.env.VENA_RETRY_ATTEMPTS) || 3,
     retryBackoff: parseInt(process.env.VENA_RETRY_BACKOFF) || 300,
-    defaultTemplateId: process.env.VENA_TEMPLATE_ID
+    defaultTemplateId: process.env.VENA_TEMPLATE_ID,
+    // New settings for streaming uploads
+    uploadTimeout: parseInt(process.env.VENA_UPLOAD_TIMEOUT) || 3600000, // 1 hour default
+    progressInterval: parseInt(process.env.VENA_PROGRESS_INTERVAL) || 30000, // 30 seconds
   },
   auth: {
     username: process.env.VENA_USERNAME,

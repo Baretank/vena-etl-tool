@@ -52,7 +52,7 @@ async function createEtlJob(templateId) {
 }
 
 /**
- * Load file to a specific ETL step
+ * Load file to a specific ETL step using streaming
  * @param {string} jobId Job ID
  * @param {string} inputId Input ID (step ID)
  * @param {string} filePath File path
@@ -81,13 +81,9 @@ async function loadFileToStep(jobId, inputId, filePath) {
   
   const fileName = path.basename(sanitizedFilePath);
   
-  // Security note: These operations use non-literal file paths as that's the core functionality
-  // of this ETL tool. The filePath is validated and sanitized before reaching this point.
+  // Get file size without loading the file
   // eslint-disable-next-line security/detect-non-literal-fs-filename
   const fileSize = (fs.statSync(sanitizedFilePath).size / 1024).toFixed(2) + ' KB';
-  
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
-  const fileContent = fs.readFileSync(sanitizedFilePath);
   
   console.log(`File: ${fileName} (${fileSize})`);
   
@@ -105,7 +101,12 @@ async function loadFileToStep(jobId, inputId, filePath) {
   };
   
   form.append('metadata', JSON.stringify(metadata));
-  form.append('file', fileContent, {
+  
+  // Create a readable stream instead of loading the entire file
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  const fileStream = fs.createReadStream(sanitizedFilePath);
+  
+  form.append('file', fileStream, {
     filename: fileName,
     contentType: 'text/csv'
   });

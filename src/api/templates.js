@@ -26,8 +26,19 @@ async function fetchWithRetry(url, options, retries, backoff) {
       const response = await fetch(url, options);
       
       if (!response.ok) {
-        const errorText = await response.text().catch(() => 'No error details available');
-        throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
+        let errorDetails = '';
+        try {
+          // Try to get error details without assuming it's text
+          errorDetails = await response.text().catch(() => 'No error details available');
+        } catch (e) {
+          errorDetails = 'No error details available';
+        }
+        throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorDetails}`);
+      }
+      
+      // Check if response is 204 No Content
+      if (response.status === 204) {
+        return { success: true };
       }
       
       return response.json();
@@ -106,7 +117,7 @@ async function getTemplateDetails(templateId) {
 }
 
 /**
- * Upload file to Vena
+ * Upload file to Vena using streaming approach
  * @param {string} csvFilePath Path to CSV file
  * @param {string} templateId Template ID
  * @param {string} fileName Filename for display and upload
@@ -116,50 +127,85 @@ async function getTemplateDetails(templateId) {
 async function uploadFile(csvFilePath, templateId, fileName, fileSize) {
   console.log(`Preparing to upload ${fileName} (${fileSize}) to Vena template ID: ${templateId}`);
   
-  const csvContent = readCsvFile(csvFilePath);
-  
   // Create form data
   const form = new FormData();
-  form.append('file', csvContent, {
+  
+  // Set up progress tracking
+  const ProgressTracker = require('../utils/progressTracker');
+  const { logUploadProgress } = require('../utils/logging');
+  
+  const tracker = new ProgressTracker(csvFilePath, config.api.progressInterval);
+  await tracker.init();
+  
+  // Create a readable stream instead of loading entire file
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  const fileStream = fs.createReadStream(csvFilePath);
+  
+  // Track upload progress by monitoring the stream's bytes read
+  let bytesUploaded = 0;
+  
+  fileStream.on('data', (chunk) => {
+    bytesUploaded += chunk.length;
+    tracker.update(bytesUploaded);
+  });
+  
+  // Start progress tracking
+  tracker.start((progress) => {
+    logUploadProgress(progress);
+  });
+  
+  form.append('file', fileStream, {
     filename: fileName,
     contentType: 'text/csv'
   });
   
+  // Build fetch options
   const options = {
     method: 'POST',
     headers: getRequestHeaders(),
-    body: form
+    body: form,
+    // Set timeout from configuration
+    timeout: config.api.uploadTimeout
   };
   
   console.log('Uploading file to Vena...');
+  console.log(`Upload timeout set to ${config.api.uploadTimeout / 1000} seconds`);
   
   // Add timestamp for tracking upload duration
   const startTime = new Date();
   
-  // Use centralized response handler with isUpload flag for specialized logging
-  const data = await handleApiResponse(
-    'upload-file',
-    async () => {
-      return await fetchWithRetry(
-        `${config.api.baseUrl}/api/public/v1/etl/templates/${templateId}/startWithFile`, 
-        options
-      );
-    },
-    {
-      fileName,
-      templateId,
-      fileSize
-    },
-    true // This is an upload operation
-  );
-  
-  const endTime = new Date();
-  const duration = ((endTime - startTime) / 1000).toFixed(2);
-  
-  console.log('✅ Success! File uploaded successfully.');
-  console.log(`Upload completed in ${duration} seconds.`);
-  
-  return data;
+  try {
+    // Use centralized response handler with isUpload flag for specialized logging
+    const data = await handleApiResponse(
+      'upload-file',
+      async () => {
+        return await fetchWithRetry(
+          `${config.api.baseUrl}/api/public/v1/etl/templates/${templateId}/startWithFile`, 
+          options
+        );
+      },
+      {
+        fileName,
+        templateId,
+        fileSize
+      },
+      true // This is an upload operation
+    );
+    
+    const endTime = new Date();
+    const duration = ((endTime - startTime) / 1000).toFixed(2);
+    
+    console.log('✅ Success! File uploaded successfully.');
+    console.log(`Upload completed in ${duration} seconds.`);
+    
+    return data;
+  } catch (err) {
+    console.error(`❌ Upload failed after ${((new Date() - startTime) / 1000).toFixed(2)} seconds.`);
+    throw err;
+  } finally {
+    // Always stop the progress tracker
+    tracker.stop();
+  }
 }
 
 module.exports = {

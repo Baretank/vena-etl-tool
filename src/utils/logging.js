@@ -39,6 +39,26 @@ function logUpload(data) {
 }
 
 /**
+ * Log upload progress
+ * @param {Object} data Upload progress details
+ */
+function logUploadProgress(data) {
+  console.log(`Upload progress: ${data.bytesUploaded} bytes (${data.percentage}%) uploaded`);
+  
+  // Log to file
+  ensureLogDirectory();
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    ...data
+  };
+  const logPath = path.join(config.logging.directory, 'upload-progress.jsonl');
+  
+  // Security note: This is a controlled file path from configuration
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  fs.appendFileSync(logPath, JSON.stringify(logEntry) + '\n');
+}
+
+/**
  * Log job operation (status check, cancel)
  * @param {Object} data Job operation details
  */
@@ -93,5 +113,6 @@ module.exports = {
   logUpload,
   logJobOperation,
   logApiOperation,
-  logError
+  logError,
+  logUploadProgress
 };
