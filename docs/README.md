@@ -435,6 +435,24 @@ If you encounter issues:
 6. Adjust retry settings if you're experiencing network reliability issues
 7. For large file uploads, check the upload progress logs and consider increasing the timeout settings
 
+### Error Codes and Resolution
+
+The tool now features a comprehensive error classification system with detailed error codes and resolution steps. For a complete reference:
+
+```bash
+# View the error catalog
+cat docs/error-codes.md
+```
+
+The error catalog provides:
+- Complete list of error codes by category
+- Detailed resolution steps for each error type
+- Common error scenarios and their solutions
+- Guidance on enabling detailed error reporting
+- Information on error monitoring and logs
+
+For more information, see the [Error Catalog](docs/error-codes.md).
+
 ### Memory Issues
 
 If you're experiencing memory problems with large files:

@@ -88,71 +88,22 @@ async function loadFileToStep(jobId, inputId, filePath, signal) {
   
   console.log(`File: ${fileName} (${fileSize})`);
   
-  // Create upload controller if no signal was provided
-  const { createUploadController } = require('../utils/uploadController');
-  const controller = !signal ? createUploadController(
-    `${fileName}-to-step-${sanitizedInputId}`, 
-    config.api.uploadTimeout
-  ) : null;
-  
-  // Use provided signal or controller's signal
-  const abortSignal = signal || controller?.signal;
-  
-  // Create form data
-  const form = new FormData();
-  
-  // Create a readable stream instead of loading the entire file
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
-  const fileStream = fs.createReadStream(sanitizedFilePath, {
-    highWaterMark: config.api.streamChunkSize || 256 * 1024 // 256KB chunks by default
-  });  
-  // Track stream state
-  let streamClosed = false;
-  
-  // Create a function to clean up resources
-  const cleanupResources = () => {
-    if (!streamClosed) {
-      try {
-        fileStream.destroy(); // Force close the stream
-        streamClosed = true;
-        console.log(`Stream for ${fileName} closed.`);
-      } catch (err) {
-        console.error(`Error closing file stream for ${fileName}:`, err.message);
-      }
-      
-      // Clean up controller if we created it
-      if (controller) {
-        controller.cleanup();
-      }
-    }
-  };
-  
-  // Handle stream errors
-  fileStream.on('error', (err) => {
-    console.error(`Stream error for ${fileName}: ${err.message}`);
-    cleanupResources();
-  });
-  
-  // Handle aborts if we have a signal
-  if (abortSignal) {
-    abortSignal.addEventListener('abort', () => {
-      console.log(`Upload of ${fileName} to step ${sanitizedInputId} aborted: ${abortSignal.reason?.message || 'Manual abort'}`);
-      cleanupResources();
-    });
-    
-    // Check if already aborted
-    if (abortSignal.aborted) {
-      console.log(`Upload of ${fileName} already aborted before starting.`);
-      throw new DOMException('The operation was aborted', 'AbortError');
-    }
+  // Check if already aborted
+  if (signal && signal.aborted) {
+    console.log(`Upload of ${fileName} already aborted before starting.`);
+    throw new DOMException('The operation was aborted', 'AbortError');
   }
   
-  fileStream.on('end', () => {
-    streamClosed = true;
-    console.log(`Stream for ${fileName} ended normally.`);
-  });
+  // Import the centralized streaming upload utility
+  const { streamingUpload } = require('../utils/streamingUpload');
   
-  // Add metadata
+  // Generate unique upload ID
+  const uploadId = `step-upload-${fileName}-${sanitizedInputId}-${Date.now()}`;
+  
+  // Define API endpoint
+  const endpoint = `${config.api.baseUrl}/api/public/v1/etl/jobs/${sanitizedJobId}/inputs/${sanitizedInputId}/file`;
+  
+  // Create metadata
   const metadata = {
     input: {
       partName: 'file',
@@ -162,107 +113,61 @@ async function loadFileToStep(jobId, inputId, filePath, signal) {
     }
   };
   
-  form.append('metadata', JSON.stringify(metadata));
-  form.append('file', fileStream, {
-    filename: fileName,
-    contentType: 'text/csv'
-  });
-  
-  // Create headers object
-  let headers = getRequestHeaders();
-  
-  // Build options for request
-  const options = {
-    method: 'PUT',
-    headers: {
-      ...headers,
-      ...form.getHeaders() // Add form-specific headers
-    },
-    body: form,
-    // Add abort signal if available
-    ...(abortSignal && { signal: abortSignal })
-  };
-  
   try {
-    // Use centralized retry operation for file upload
-    // This endpoint returns 204 No Content, so we need special handling
-    await retryOperation(
-      async () => {
-        // Check if already aborted
-        if (abortSignal && abortSignal.aborted) {
-          throw new DOMException('The operation was aborted', 'AbortError');
-        }
+    // Use the centralized streaming upload function
+    await streamingUpload({
+      filePath: sanitizedFilePath,
+      uploadId,
+      endpoint,
+      method: 'PUT', // Override default POST method
+      headers: getRequestHeaders(),
+      metadata,
+      signal,
+      onSuccess: () => {
+        console.log(`✅ File ${fileName} loaded to ETL step ${sanitizedInputId} successfully`);
         
-        const response = await fetch(
-          `${config.api.baseUrl}/api/public/v1/etl/jobs/${sanitizedJobId}/inputs/${sanitizedInputId}/file`, 
-          options
-        );
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-        
-        return response;
+        // Log the operation
+        logUpload({
+          jobId: sanitizedJobId,
+          inputId: sanitizedInputId,
+          fileName,
+          fileSize,
+          status: 'success'
+        });
       },
-      3, // Number of retries
-      1000, // Initial backoff time
-      (error) => {
-        // Don't retry if aborted
-        if (error.name === 'AbortError') {
-          return false;
-        }
+      onError: (err) => {
+        console.error(`❌ Error loading file ${fileName} to step ${sanitizedInputId}: ${err.message}`);
         
-        // Retry on network errors or server errors (5xx)
-        const isNetworkError = error.message.includes('ECONNRESET') || 
-                              error.message.includes('ETIMEDOUT') || 
-                              error.message.includes('ECONNREFUSED');
-        const isServerError = error.message.includes('HTTP error! Status: 5');
-        return isNetworkError || isServerError;
+        // Log the error
+        logError({
+          action: 'load-file-to-step-error',
+          jobId: sanitizedJobId,
+          inputId: sanitizedInputId,
+          fileName,
+          error: err.message
+        });
+      },
+      onAbort: (reason) => {
+        console.log(`Upload of ${fileName} to step ${sanitizedInputId} aborted: ${reason.message || 'Manual abort'}`);
+        
+        // Log the abort
+        logError({
+          action: 'load-file-to-step-aborted',
+          jobId: sanitizedJobId,
+          inputId: sanitizedInputId,
+          fileName,
+          reason: reason.message || 'Manual abort'
+        });
+      },
+      onStalled: (stallInfo) => {
+        console.warn(`Upload stalled: ${stallInfo.fileName} to step ${sanitizedInputId} has not progressed for ${stallInfo.stallTime} seconds`);
       }
-    );
-    
-    console.log(`✅ File ${fileName} loaded to ETL step ${sanitizedInputId} successfully`);
-    
-    // Log the operation
-    logUpload({
-      jobId: sanitizedJobId,
-      inputId: sanitizedInputId,
-      fileName,
-      fileSize,
-      status: 'success'
     });
     
     return;
   } catch (err) {
-    // Check if this was an abort
-    if (err.name === 'AbortError') {
-      console.error(`Upload of ${fileName} to step ${sanitizedInputId} was aborted: ${err.message}`);
-      
-      // Log the abort
-      logError({
-        action: 'load-file-to-step-aborted',
-        jobId: sanitizedJobId,
-        inputId: sanitizedInputId,
-        fileName,
-        reason: err.message || 'Manual abort'
-      });
-    } else {
-      console.error(`❌ Error loading file ${fileName} to step ${sanitizedInputId}: ${err.message}`);
-      
-      // Log the error
-      logError({
-        action: 'load-file-to-step-error',
-        jobId: sanitizedJobId,
-        inputId: sanitizedInputId,
-        fileName,
-        error: err.message
-      });
-    }
-    
+    // Errors already logged in callback handlers
     throw err;
-  } finally {
-    // Always clean up resources
-    cleanupResources();
   }
 }
 

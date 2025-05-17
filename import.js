@@ -20,8 +20,22 @@ const { logError } = require('./src/utils/logging');
 const { executeWithErrorHandling } = require('./src/utils/apiResponse');
 const { initTerminationHandlers } = require('./src/utils/terminationHandler');
 
-// Initialize graceful termination handling
-initTerminationHandlers();
+// Initialize graceful termination handling with proper cleanup
+// This ensures all handlers are properly registered
+const terminationHandlerModule = require('./src/utils/terminationHandler');
+terminationHandlerModule.initTerminationHandlers();
+
+// Make sure we only initialize once
+if (!global.terminationHandlersInitialized) {
+  global.terminationHandlersInitialized = true;
+  console.log('Termination handlers initialized for graceful shutdown');
+
+  // Ensure cleanup happens when process exits naturally
+  process.on('exit', () => {
+    console.log('Process exiting, final cleanup in progress...');
+    // Final synchronous cleanup can be performed here
+  });
+}
 
 // Validate configuration
 validateConfig();
@@ -88,16 +102,50 @@ async function main() {
         throw new Error('Missing CSV file path');
       }
         
-      // Validate file
-      const validation = validateCsvFile(csvFilePath);
+      // Validate file with enhanced checks
+      console.log('Validating CSV file...');
+      
+      // Get template details to extract required headers
+      let requiredHeaders = [];
+      if (templateId) {
+        try {
+          console.log(`Getting template details for ${templateId} to validate headers...`);
+          const template = await getTemplateDetails(templateId);
+          
+          // Extract required headers from template if available
+          if (template && template.headers) {
+            requiredHeaders = template.headers.map(h => h.name).filter(Boolean);
+            console.log(`Template requires these headers: ${requiredHeaders.join(', ')}`);
+          }
+        } catch (err) {
+          console.log('Could not retrieve template details for header validation. Proceeding with basic validation only.');
+        }
+      }
+      
+      // Perform enhanced validation with headers and structure check
+      const validation = await validateCsvFile(csvFilePath, requiredHeaders, true);
         
       if (!validation.success) {
         console.error(`Error: ${validation.error}`);
         throw new Error(validation.error);
       }
         
-      if (validation.warning) {
-        console.warn(`Warning: ${validation.warning}`);
+      // Show warnings (can be multiple now)
+      if (validation.warnings) {
+        validation.warnings.forEach(warning => {
+          console.warn(`Warning: ${warning}`);
+        });
+      }
+      
+      // Show validation details
+      if (validation.validationDetails) {
+        if (validation.validationDetails.headers) {
+          console.log(`CSV headers: ${validation.validationDetails.headers.headers?.join(', ')}`);
+        }
+        
+        if (validation.validationDetails.formatCheck && validation.validationDetails.formatCheck.valid) {
+          console.log(`Format validation: Checked ${validation.validationDetails.formatCheck.checked} rows, all valid.`);
+        }
       }
         
       // Get template ID
@@ -224,21 +272,32 @@ async function main() {
   });
 }
 
-// Execute the main function
-main()
-  // Using promises to handle exit without process.exit
-  .then(success => {
+// Execute the main function and ensure proper error handling
+async function runMain() {
+  try {
+    const success = await main();
+    
     if (!success) {
-      // For unsuccessful execution, throw to get a non-zero exit code
-      throw new Error('Execution failed');
+      // For unsuccessful execution, set a non-zero exit code
+      process.exitCode = 1;
+      console.error('Execution completed with errors');
+    } else {
+      // Normal successful termination
+      process.exitCode = 0;
     }
-    // Normal termination with success
-  })
-  .catch(err => {
+  } catch (err) {
+    // Handle any unhandled errors from main
     console.error('Unhandled error:', err);
     logError({
       action: 'main-execution',
-      error: err.toString()
+      error: err.toString(),
+      stack: err.stack
     });
-    throw err; // This will cause the process to exit with a non-zero code
-  });
+    
+    // Set exit code for failure
+    process.exitCode = 1;
+  }
+}
+
+// Run the main function
+runMain();

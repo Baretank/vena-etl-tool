@@ -31,8 +31,22 @@ const { retryOperation, executeWithErrorHandling } = require('./src/utils/apiRes
 const { createUploadController } = require('./src/utils/uploadController');
 const { initTerminationHandlers, registerUpload, unregisterUpload } = require('./src/utils/terminationHandler');
 
-// Initialize termination handlers
-initTerminationHandlers();
+// Initialize termination handlers with proper cleanup
+// This ensures all handlers are properly registered
+const terminationHandlerModule = require('./src/utils/terminationHandler');
+terminationHandlerModule.initTerminationHandlers();
+
+// Make sure we only initialize once
+if (!global.terminationHandlersInitialized) {
+  global.terminationHandlersInitialized = true;
+  console.log('Termination handlers initialized for graceful shutdown');
+
+  // Ensure cleanup happens when process exits naturally
+  process.on('exit', () => {
+    console.log('Process exiting, final cleanup in progress...');
+    // Final synchronous cleanup can be performed here
+  });
+}
 
 // Scheduler
 const { 
@@ -236,16 +250,54 @@ async function uploadFileWithRetry(filePath, templateId, maxRetries = 3) {
   registerUpload(uploadId, controller);
   
   try {
-    // Validate file first
-    const validation = validateCsvFile(filePath);
+    // Validate file with enhanced checks
+    console.log('Validating CSV file...');
+    
+    // Get template details to extract required headers if possible
+    let requiredHeaders = [];
+    try {
+      if (templateId) {
+        console.log(`Getting template details for ${templateId} to validate headers...`);
+        // Use the fetchWithRetry function from templates module
+        const template = await fetchWithRetry(
+          `${config.api.baseUrl}/api/public/v1/etl/templates/${templateId}`, 
+          { headers: getRequestHeaders() }
+        );
+        
+        // Extract required headers from template if available
+        if (template && template.headers) {
+          requiredHeaders = template.headers.map(h => h.name).filter(Boolean);
+          console.log(`Template requires these headers: ${requiredHeaders.join(', ')}`);
+        }
+      }
+    } catch (err) {
+      console.log('Could not retrieve template details for header validation. Proceeding with basic validation only.');
+    }
+    
+    // Perform enhanced validation with headers and structure check
+    const validation = await validateCsvFile(filePath, requiredHeaders, true);
     
     if (!validation.success) {
       console.error(`Error: ${validation.error}`);
       return { success: false, error: validation.error };
     }
     
-    if (validation.warning) {
-      console.warn(`Warning: ${validation.warning}`);
+    // Show warnings (can be multiple now)
+    if (validation.warnings) {
+      validation.warnings.forEach(warning => {
+        console.warn(`Warning: ${warning}`);
+      });
+    }
+    
+    // Show validation details
+    if (validation.validationDetails) {
+      if (validation.validationDetails.headers) {
+        console.log(`CSV headers: ${validation.validationDetails.headers.headers?.join(', ')}`);
+      }
+      
+      if (validation.validationDetails.formatCheck && validation.validationDetails.formatCheck.valid) {
+        console.log(`Format validation: Checked ${validation.validationDetails.formatCheck.checked} rows, all valid.`);
+      }
     }
     
     // Use retry operation utility
@@ -360,12 +412,33 @@ async function loadFileToStepWithRetry(jobId, inputId, filePath, maxRetries = 3)
   registerUpload(uploadId, controller);
   
   try {
-    // Validate file first
-    const validation = validateCsvFile(filePath);
+    // Validate file with enhanced checks
+    console.log('Validating CSV file for step input...');
+    
+    // We don't know header requirements for specific steps, so do basic validation
+    const validation = await validateCsvFile(filePath, [], true);
     
     if (!validation.success) {
       console.error(`Error: ${validation.error}`);
       return { success: false, error: validation.error };
+    }
+    
+    // Show warnings (can be multiple now)
+    if (validation.warnings) {
+      validation.warnings.forEach(warning => {
+        console.warn(`Warning: ${warning}`);
+      });
+    }
+    
+    // Show validation details
+    if (validation.validationDetails) {
+      if (validation.validationDetails.headers) {
+        console.log(`CSV headers: ${validation.validationDetails.headers.headers?.join(', ')}`);
+      }
+      
+      if (validation.validationDetails.formatCheck && validation.validationDetails.formatCheck.valid) {
+        console.log(`Format validation: Checked ${validation.validationDetails.formatCheck.checked} rows, all valid.`);
+      }
     }
     
     // Use retry operation utility
@@ -810,22 +883,32 @@ async function main() {
   });
 }
 
-// Execute the main function
-main()
-  // Using regular promises instead of explicit process.exit
-  // Node will automatically exit when the promise chain completes
-  .then(success => {
+// Execute the main function and ensure proper error handling
+async function runMain() {
+  try {
+    const success = await main();
+    
     if (!success) {
-      // For unsuccessful execution, use a non-zero exit code by throwing
-      throw new Error('Execution failed with errors');
+      // For unsuccessful execution, set a non-zero exit code
+      process.exitCode = 1;
+      console.error('Execution completed with errors');
+    } else {
+      // Normal successful termination
+      process.exitCode = 0;
     }
-    // Otherwise the process will naturally exit with code 0
-  })
-  .catch(err => {
+  } catch (err) {
+    // Handle any unhandled errors from main
     console.error('Unhandled error:', err);
     logError({
-      action: 'main-execution-promise',
-      error: err.toString()
+      action: 'main-execution',
+      error: err.toString(),
+      stack: err.stack
     });
-    throw err; // This will cause the process to exit with a non-zero code
-  });
+    
+    // Set exit code for failure
+    process.exitCode = 1;
+  }
+}
+
+// Run the main function
+runMain();
