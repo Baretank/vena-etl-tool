@@ -289,6 +289,8 @@ Here's a comprehensive list of all environment variables used by the tool:
 2. **Streaming Upload Configuration**:
    - `VENA_UPLOAD_TIMEOUT`: Timeout for uploads in milliseconds (default: 3600000)
    - `VENA_PROGRESS_INTERVAL`: Progress reporting interval in milliseconds (default: 30000)
+   - `VENA_STREAM_CHUNK_SIZE`: Stream chunk size in bytes (default: 65536)
+   - `VENA_ABORT_ON_TIMEOUT`: Whether to abort uploads on timeout (default: true)
 
 3. **Multi-Import Configuration**:
    - `VENA_SOURCE_DIRECTORY`: Path to the CSV files
@@ -338,6 +340,7 @@ vena-etl-tool/
 │   │   ├── fileHandling.js    # File operations and validation
 │   │   ├── logging.js         # Logging functions
 │   │   ├── progressTracker.js # Upload progress tracking for streaming
+│   │   ├── uploadController.js # Manages upload abort handling and timeouts
 │   │   └── apiResponse.js     # Centralized API response and error handling
 │   └── config.js              # Centralized configuration
 ├── import.js                  # Single file import entry point

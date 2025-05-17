@@ -165,8 +165,10 @@ async function uploadFile(csvFilePath, templateId, fileName, fileSize) {
   await tracker.init();
   
   // Create a readable stream instead of loading entire file
-  const fileStream = fs.createReadStream(csvFilePath);
-  
+  const fileStream = fs.createReadStream(csvFilePath, {
+    highWaterMark: config.api.streamChunkSize || 256 * 1024 // 256KB chunks by default
+  });
+    
   // Track stream state
   let streamClosed = false;
   

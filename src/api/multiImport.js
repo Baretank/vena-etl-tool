@@ -9,7 +9,7 @@ const fetch = require('node-fetch'); // Added missing import
 const { config } = require('../config');
 const { getRequestHeaders } = require('../auth');
 const { fetchWithRetry } = require('./templates');
-const { logUpload } = require('../utils/logging');
+const { logUpload, logError} = require('../utils/logging');
 const { sanitizeFilePath, sanitizeId } = require('../utils/fileHandling');
 const { handleApiResponse, retryOperation } = require('../utils/apiResponse');
 
@@ -103,8 +103,9 @@ async function loadFileToStep(jobId, inputId, filePath, signal) {
   
   // Create a readable stream instead of loading the entire file
   // eslint-disable-next-line security/detect-non-literal-fs-filename
-  const fileStream = fs.createReadStream(sanitizedFilePath);
-  
+  const fileStream = fs.createReadStream(sanitizedFilePath, {
+    highWaterMark: config.api.streamChunkSize || 256 * 1024 // 256KB chunks by default
+  });  
   // Track stream state
   let streamClosed = false;
   
@@ -268,9 +269,10 @@ async function loadFileToStep(jobId, inputId, filePath, signal) {
 /**
  * Submit an ETL job for processing
  * @param {string} jobId Job ID
+ * @param {AbortSignal} signal Optional abort signal
  * @returns {Promise<Object>} Job status
  */
-async function submitJob(jobId) {
+async function submitJob(jobId, signal) {
   // Sanitize the job ID to prevent injection attacks
   const sanitizedJobId = sanitizeId(jobId);
   
@@ -285,13 +287,26 @@ async function submitJob(jobId) {
     headers: getRequestHeaders()
   };
   
+  // Add abort signal if provided
+  if (signal) {
+    options.signal = signal;
+  }
+  
   // Use centralized response handler
   const result = await handleApiResponse(
     'submit-job',
     async () => {
+      // Check if already aborted
+      if (signal && signal.aborted) {
+        throw new DOMException('The operation was aborted', 'AbortError');
+      }
+      
       return await fetchWithRetry(
         `${config.api.baseUrl}/api/public/v1/etl/jobs/${sanitizedJobId}/submit`, 
-        options
+        options,
+        undefined, // Use default retries
+        undefined, // Use default backoff
+        signal // Pass signal to fetchWithRetry
       );
     },
     { jobId: sanitizedJobId }

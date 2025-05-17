@@ -14,6 +14,7 @@ const config = {
     uploadTimeout: parseInt(process.env.VENA_UPLOAD_TIMEOUT) || 3600000, // 1 hour default
     progressInterval: parseInt(process.env.VENA_PROGRESS_INTERVAL) || 30000, // 30 seconds
     abortOnTimeout: process.env.VENA_ABORT_ON_TIMEOUT !== 'false', // Default true
+    streamChunkSize: parseInt(process.env.VENA_STREAM_CHUNK_SIZE) || 262144, // 256KB default chunk size
   },
   auth: {
     username: process.env.VENA_USERNAME,
