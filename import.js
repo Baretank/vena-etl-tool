@@ -18,6 +18,10 @@ const { checkJobStatus, cancelJob } = require('./src/api/jobs');
 const { validateCsvFile } = require('./src/utils/fileHandling');
 const { logError } = require('./src/utils/logging');
 const { executeWithErrorHandling } = require('./src/utils/apiResponse');
+const { initTerminationHandlers } = require('./src/utils/terminationHandler');
+
+// Initialize graceful termination handling
+initTerminationHandlers();
 
 // Validate configuration
 validateConfig();

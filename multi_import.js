@@ -29,9 +29,10 @@ const {
 const { logError } = require('./src/utils/logging');
 const { retryOperation, executeWithErrorHandling } = require('./src/utils/apiResponse');
 const { createUploadController } = require('./src/utils/uploadController');
+const { initTerminationHandlers, registerUpload, unregisterUpload } = require('./src/utils/terminationHandler');
 
-// Store active uploads for potential abort
-const activeUploads = new Map();
+// Initialize termination handlers
+initTerminationHandlers();
 
 // Scheduler
 const { 
@@ -52,27 +53,7 @@ if (args.length > 0 && ['run', 'schedule', 'check-schedule', 'delete-schedule', 
   command = args[0];
 }
 
-// Handle termination signals
-process.on('SIGINT', async () => {
-  console.log('\n\nReceived interrupt signal. Cleaning up active uploads...');
-  
-  // Abort all active uploads
-  const abortPromises = [];
-  activeUploads.forEach((controller, id) => {
-    console.log(`Aborting upload: ${id}`);
-    controller.abort(new Error('User interrupted process'));
-    abortPromises.push(new Promise(resolve => setTimeout(resolve, 100))); // Small delay for cleanup
-  });
-  
-  // Wait a moment for cleanup to complete
-  if (abortPromises.length > 0) {
-    console.log(`Waiting for ${abortPromises.length} uploads to abort...`);
-    await Promise.all(abortPromises);
-  }
-  
-  console.log('Clean-up complete. Exiting...');
-  process.exit(1);
-});
+// Termination handling is now done by the terminationHandler module
 
 // Display help
 if (command === 'help') {
@@ -251,8 +232,8 @@ async function uploadFileWithRetry(filePath, templateId, maxRetries = 3) {
   
   // Create upload controller for abort handling and timeouts
   const controller = createUploadController(uploadId, config.api.uploadTimeout);
-  // Register with active uploads for potential abort
-  activeUploads.set(uploadId, controller);
+  // Register with termination handler for coordinated abort
+  registerUpload(uploadId, controller);
   
   try {
     // Validate file first
@@ -316,9 +297,9 @@ async function uploadFileWithRetry(filePath, templateId, maxRetries = 3) {
     });
     return { success: false, error: err.message };
   } finally {
-    // Always clean up and remove from active uploads
+    // Always clean up and unregister from termination handler
     controller.cleanup();
-    activeUploads.delete(uploadId);
+    unregisterUpload(uploadId);
   }
 }
 
@@ -375,8 +356,8 @@ async function loadFileToStepWithRetry(jobId, inputId, filePath, maxRetries = 3)
   
   // Create upload controller for abort handling and timeouts
   const controller = createUploadController(uploadId, config.api.uploadTimeout);
-  // Register with active uploads for potential abort
-  activeUploads.set(uploadId, controller);
+  // Register with termination handler for coordinated abort
+  registerUpload(uploadId, controller);
   
   try {
     // Validate file first
@@ -437,9 +418,9 @@ async function loadFileToStepWithRetry(jobId, inputId, filePath, maxRetries = 3)
     });
     return { success: false, error: err.message };
   } finally {
-    // Always clean up and remove from active uploads
+    // Always clean up and unregister from termination handler
     controller.cleanup();
-    activeUploads.delete(uploadId);
+    unregisterUpload(uploadId);
   }
 }
 
@@ -548,8 +529,8 @@ async function executeMultiUpload() {
             });
           }
           
-          // Check if the process has been interrupted (check if there are active aborts)
-          if (activeUploads.size === 0 && Array.from(activeUploads.values()).some(c => c.signal.aborted)) {
+          // Check if the process has been interrupted
+          if (process.exitCode !== undefined) {
             console.log('\nProcess interrupted. Stopping further uploads.');
             break;
           }

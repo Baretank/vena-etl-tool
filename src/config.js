@@ -15,6 +15,27 @@ const config = {
     progressInterval: parseInt(process.env.VENA_PROGRESS_INTERVAL) || 30000, // 30 seconds
     abortOnTimeout: process.env.VENA_ABORT_ON_TIMEOUT !== 'false', // Default true
     streamChunkSize: parseInt(process.env.VENA_STREAM_CHUNK_SIZE) || 262144, // 256KB default chunk size
+    
+    // Backpressure settings
+    memoryThreshold: parseInt(process.env.VENA_MEMORY_THRESHOLD) || 104857600, // 100MB default
+    minUploadRate: parseInt(process.env.VENA_MIN_UPLOAD_RATE) || 5242880, // 5MB/s default
+    streamBackoff: parseInt(process.env.VENA_STREAM_BACKOFF) || 2000, // 2 seconds default
+    
+    // Adaptive backpressure settings
+    adaptiveBackpressure: process.env.VENA_ADAPTIVE_BACKPRESSURE !== 'false', // Default true
+    adaptiveThresholdFactor: parseFloat(process.env.VENA_ADAPTIVE_THRESHOLD_FACTOR) || 0.7, // 70% of average rate
+    adaptiveBackoffFactorMin: parseFloat(process.env.VENA_ADAPTIVE_BACKOFF_MIN) || 0.5, // Min multiplier for backoff time
+    adaptiveBackoffFactorMax: parseFloat(process.env.VENA_ADAPTIVE_BACKOFF_MAX) || 2.0, // Max multiplier for backoff time
+    
+    // Stall detection settings
+    stallDetectionEnabled: process.env.VENA_STALL_DETECTION !== 'false', // Default true
+    stallThreshold: parseInt(process.env.VENA_STALL_THRESHOLD) || 3, // 3 intervals without progress
+    
+    // Memory monitoring settings
+    memoryMonitoringEnabled: process.env.VENA_MEMORY_MONITORING !== 'false', // Default true
+    memoryWarningThreshold: parseInt(process.env.VENA_MEMORY_WARNING_THRESHOLD) || 1073741824, // 1GB default
+    memoryCriticalThreshold: parseInt(process.env.VENA_MEMORY_CRITICAL_THRESHOLD) || 1610612736, // 1.5GB default
+    memoryCheckInterval: parseInt(process.env.VENA_MEMORY_CHECK_INTERVAL) || 5000, // 5 seconds default
   },
   auth: {
     username: process.env.VENA_USERNAME,

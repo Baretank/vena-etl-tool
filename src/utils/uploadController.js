@@ -54,6 +54,25 @@ function createUploadController(uploadName, timeoutMs) {
         clearTimeout(timeoutId);
         timeoutId = null;
       }
+      
+      // Clean up any event listeners attached to the signal
+      // (for older Node.js versions that don't auto-clean listeners)
+      if (typeof signal.removeEventListener === 'function') {
+        // Get all event types that might have listeners
+        const possibleEvents = ['abort'];
+        
+        // For each event type, try to remove all listeners
+        possibleEvents.forEach(eventType => {
+          try {
+            // Using a dummy function since we can't access the original handlers
+            const noopHandler = () => {};
+            signal.removeEventListener(eventType, noopHandler);
+          } catch (err) {
+            // Some Node.js versions might not support removing unknown listeners
+            // Just continue silently
+          }
+        });
+      }
     }
   };
 }

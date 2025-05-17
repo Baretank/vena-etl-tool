@@ -15,6 +15,11 @@ A command-line utility for interacting with Vena's ETL API. This tool allows you
 - **Automatic Retry Logic**: Handle network issues with automatic retries and exponential backoff
 - **Enhanced Security**: Input sanitization to prevent injection vulnerabilities
 - **Streaming Upload Support**: Memory-efficient handling of large files (5-50GB) with progress tracking
+- **Adaptive Backpressure**: Smart adjustment of upload speeds based on network conditions
+- **Memory Monitoring**: Active monitoring and management of memory usage during large uploads
+- **Graceful Termination**: Clean handling of process interruptions and shutdowns
+- **Stall Detection**: Identification and reporting of stalled uploads
+- **Enhanced Error Classification**: Detailed error types for better troubleshooting
 
 ## Installation
 
@@ -189,19 +194,28 @@ The tool uses a streaming approach to efficiently handle very large files (5-50G
 ### Key Benefits
 
 - **Memory Efficiency**: Files are processed as streams rather than loaded entirely into memory
+- **Adaptive Backpressure**: Intelligently adjusts file reading speed based on historical upload rates
 - **Progress Tracking**: Real-time display of upload progress, speed, and estimated completion time
 - **Large File Support**: Reliably handle files of any size without running out of memory
-- **Configurable**: Adjustable timeouts and progress reporting intervals
+- **Stall Detection**: Identifies and reports stalled uploads with detailed diagnostics
+- **Memory Monitoring**: Actively monitors memory usage and applies emergency backpressure when needed
+- **Graceful Termination**: Ensures proper cleanup of resources during process termination
+- **Enhanced Error Classification**: Detailed categorization of errors for better troubleshooting
+- **Detailed Network Metrics**: Tracking of both read and actual sent bytes for network latency measurement
+- **Improved Time Estimates**: More accurate time remaining calculations based on historical upload rates
+- **Configurable**: Extensive configuration options with sensible defaults
 
 ### Progress Tracking
 
-During file uploads, you'll see progress information displaying:
+During file uploads, you'll see enhanced progress information displaying:
 
 - Bytes uploaded and total file size
 - Upload percentage complete 
-- Current upload speed
+- Current upload speed (calculated from recent history for accuracy)
 - Elapsed time
-- Estimated time remaining
+- Estimated time remaining (with improved calculation algorithm)
+- Stall detection indicators
+- Network latency measurements
 
 Example output:
 ```
@@ -209,6 +223,16 @@ Upload progress: 104857600 bytes (10%) uploaded
 Upload speed: 2.34 MB/s
 Elapsed time: 42s
 Estimated time remaining: 6m 18s
+Bytes actually sent: 98304000 bytes (Network latency: 6.25 MB)
+```
+
+In addition, you'll see network and memory diagnostics when relevant:
+```
+Applying adaptive backpressure: Current rate 1.21 MB/s is below threshold
+Adaptive backoff: 3200ms (severity factor: 1.60)
+
+Memory warning: 1.03 GB total, 756.45 MB heap used
+Peak memory usage: RSS 1.42 GB, Heap 843.72 MB
 ```
 
 ### Memory Usage Comparison
@@ -289,8 +313,29 @@ Here's a comprehensive list of all environment variables used by the tool:
 2. **Streaming Upload Configuration**:
    - `VENA_UPLOAD_TIMEOUT`: Timeout for uploads in milliseconds (default: 3600000)
    - `VENA_PROGRESS_INTERVAL`: Progress reporting interval in milliseconds (default: 30000)
-   - `VENA_STREAM_CHUNK_SIZE`: Stream chunk size in bytes (default: 65536)
+   - `VENA_STREAM_CHUNK_SIZE`: Stream chunk size in bytes (default: 262144)
    - `VENA_ABORT_ON_TIMEOUT`: Whether to abort uploads on timeout (default: true)
+   
+   **Backpressure Settings**:
+   - `VENA_MEMORY_THRESHOLD`: Threshold for buffer size before activating backpressure (default: 100MB)
+   - `VENA_MIN_UPLOAD_RATE`: Minimum upload rate before pausing stream (default: 5MB/s)
+   - `VENA_STREAM_BACKOFF`: Delay time in ms before resuming paused streams (default: 2000)
+   
+   **Adaptive Backpressure Settings**:
+   - `VENA_ADAPTIVE_BACKPRESSURE`: Enable adaptive backpressure (default: true)
+   - `VENA_ADAPTIVE_THRESHOLD_FACTOR`: Apply backpressure when rate drops below this percentage of average (default: 0.7)
+   - `VENA_ADAPTIVE_BACKOFF_MIN`: Minimum backoff time multiplier (default: 0.5)
+   - `VENA_ADAPTIVE_BACKOFF_MAX`: Maximum backoff time multiplier (default: 2.0)
+   
+   **Stall Detection Settings**:
+   - `VENA_STALL_DETECTION`: Enable upload stall detection (default: true)
+   - `VENA_STALL_THRESHOLD`: Number of intervals with no progress before considering stalled (default: 3)
+   
+   **Memory Monitoring Settings**:
+   - `VENA_MEMORY_MONITORING`: Enable memory usage monitoring (default: true)
+   - `VENA_MEMORY_WARNING_THRESHOLD`: Memory warning threshold in bytes (default: 1GB)
+   - `VENA_MEMORY_CRITICAL_THRESHOLD`: Memory critical threshold in bytes (default: 1.5GB)
+   - `VENA_MEMORY_CHECK_INTERVAL`: Memory check interval in milliseconds (default: 5000)
 
 3. **Multi-Import Configuration**:
    - `VENA_SOURCE_DIRECTORY`: Path to the CSV files
@@ -328,21 +373,24 @@ The tool is organized into the following modules:
 ```
 vena-etl-tool/
 ├── src/
-│   ├── auth/                  # Authentication utilities
-│   │   └── index.js           # Handles credential management and authentication
-│   ├── api/                   # API interaction modules
-│   │   ├── templates.js       # Template and upload operations
-│   │   ├── jobs.js            # Job status and management
-│   │   └── multiImport.js     # Multi-step ETL operations
-│   ├── scheduler/             # Scheduling utilities
+│   ├── auth/                   # Authentication utilities
+│   │   └── index.js            # Handles credential management and authentication
+│   ├── api/                    # API interaction modules
+│   │   ├── templates.js        # Template and upload operations
+│   │   ├── jobs.js             # Job status and management
+│   │   └── multiImport.js      # Multi-step ETL operations
+│   ├── scheduler/              # Scheduling utilities
 │   │   └── windowsTaskScheduler.js  # Windows task scheduling
-│   ├── utils/                 # Utility functions
-│   │   ├── fileHandling.js    # File operations and validation
-│   │   ├── logging.js         # Logging functions
-│   │   ├── progressTracker.js # Upload progress tracking for streaming
+│   ├── utils/                  # Utility functions
+│   │   ├── fileHandling.js     # File operations and validation
+│   │   ├── logging.js          # Logging functions
+│   │   ├── progressTracker.js  # Upload progress tracking with stall detection
 │   │   ├── uploadController.js # Manages upload abort handling and timeouts
-│   │   └── apiResponse.js     # Centralized API response and error handling
-│   └── config.js              # Centralized configuration
+│   │   ├── monitoredFormData.js # Enhanced form-data with monitoring capabilities
+│   │   ├── memoryMonitor.js    # Memory usage monitoring during uploads
+│   │   ├── terminationHandler.js # Graceful process termination management
+│   │   └── apiResponse.js      # Centralized API response and error handling
+│   └── config.js               # Centralized configuration
 ├── import.js                  # Single file import entry point
 ├── multi_import.js            # Multi-file import entry point
 ├── test-streaming-upload.js   # Streaming upload test script
@@ -390,9 +438,36 @@ If you encounter issues:
 ### Memory Issues
 
 If you're experiencing memory problems with large files:
-- Ensure you're using the latest version with streaming support
+- Ensure you're using the latest version with enhanced streaming support and memory monitoring
 - Check that your Node.js version is 14 or higher
-- For extremely large files (>10GB), consider increasing the Node.js memory limit: `node --max-old-space-size=4096 import.js ...`
+- The enhanced adaptive backpressure implementation should handle files of any size without memory issues
+- Monitor the memory usage reports during uploads to identify potential problems
+- Adjust the following settings to optimize for your specific environment:
+  - `VENA_MEMORY_THRESHOLD`: Lower for slower networks or less RAM
+  - `VENA_MIN_UPLOAD_RATE`: Adjust based on your network speed
+  - `VENA_ADAPTIVE_THRESHOLD_FACTOR`: Lower (e.g., 0.5) for more aggressive backpressure
+  - `VENA_MEMORY_WARNING_THRESHOLD`: Set based on your system's available RAM
+  - `VENA_MEMORY_CRITICAL_THRESHOLD`: Set to prevent out-of-memory conditions
+- For truly massive files (>50GB), consider adjusting Node.js memory limits: `node --max-old-space-size=4096 import.js ...`
+
+### Network Issues
+
+If you're experiencing network-related problems:
+- Enable the adaptive backpressure feature (enabled by default)
+- Check for stalled uploads in the progress output
+- Monitor the network latency metric to identify potential bandwidth limitations
+- For highly variable networks (like cellular or shared Wi-Fi), adjust:
+  - `VENA_ADAPTIVE_BACKOFF_MAX`: Increase for more aggressive backoff on unstable networks
+  - `VENA_STALL_THRESHOLD`: Lower for faster detection of stalled uploads
+  - `VENA_PROGRESS_INTERVAL`: Lower for more frequent progress updates and stall detection
+  
+### Process Termination
+
+If the process is interrupted or prematurely terminated:
+- The graceful termination handler ensures resources are properly cleaned up
+- Check the logs for any aborted uploads
+- For scheduled tasks, ensure proper handling of termination signals
+- The upload history logs should provide information about any incomplete uploads
 
 ## Making the Script Executable (Unix/Linux/Mac)
 
